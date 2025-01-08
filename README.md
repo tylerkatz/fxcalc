@@ -1,3 +1,9 @@
+# FXCalc
+
+A simple currency converter built with Go and Fyne.
+
+![FXCalc Demo](ui/assets/fxcalc_gui_demo.gif)
+
 # FX Calculator
 
 A desktop application for calculating forex position sizes with risk management features, built using Go and Fyne UI framework.
