@@ -49,6 +49,18 @@ sh bundle/osx.sh
 ```
 This will create a macOS application bundle (.app) in the current directory.
 
+#### Windows
+```bash
+sh bundle/win.sh
+```
+This will create a Windows executable (.exe) in the current directory.
+
+#### Linux
+```bash
+sh bundle/linux.sh
+```
+This will create a Linux binary in the current directory.
+
 ## Usage
 
 The application provides a graphical interface for forex position sizing calculations:
