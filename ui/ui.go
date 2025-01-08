@@ -1,6 +1,7 @@
 package ui
 
 import (
+	_ "embed"
 	"fmt"
 	"image/color"
 	"strconv"
@@ -15,9 +16,23 @@ import (
 	"fyne.io/fyne/v2/widget"
 )
 
+//go:embed assets/fxcalc_logo.png
+var iconData []byte
+
 // New creates a new UI instance
 func New() *UI {
+	if len(iconData) == 0 {
+		panic("Icon data not loaded")
+	}
 	myApp := app.New()
+
+	// Set app icon using embedded data
+	icon := &fyne.StaticResource{
+		StaticName:    "Icon.png",
+		StaticContent: iconData,
+	}
+	myApp.SetIcon(icon)
+
 	window := myApp.NewWindow("fxcalc")
 
 	ui := &UI{
