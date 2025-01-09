@@ -33,16 +33,23 @@ func New() *UI {
 	}
 	myApp.SetIcon(icon)
 
-	window := myApp.NewWindow("fxcalc")
-
 	ui := &UI{
-		window:  window,
+		window:  myApp.NewWindow("FX Position Size Calculator"),
 		fxPairs: GetFXPairs(),
-		widgets: createWidgets(),
 	}
 
-	ui.setupCallbacks()
+	// Create widgets first
+	ui.widgets = createWidgets()
+
+	// Create layout (which creates containers)
 	ui.createLayout()
+
+	// Setup callbacks after containers are created
+	ui.setupCallbacks()
+
+	// Set window content and show
+	ui.window.Resize(fyne.NewSize(400, 600))
+	ui.window.Show()
 
 	return ui
 }
@@ -76,6 +83,11 @@ func createWidgets() *Widgets {
 			fyne.TextAlignLeading,
 			fyne.TextStyle{Italic: true},
 		),
+		// Initialize cross rate inputs
+		baseHighPriceEntry:  widget.NewEntry(),
+		baseLowPriceEntry:   widget.NewEntry(),
+		quoteHighPriceEntry: widget.NewEntry(),
+		quoteLowPriceEntry:  widget.NewEntry(),
 	}
 
 	// Set initial styles and states
@@ -96,12 +108,20 @@ func createWidgets() *Widgets {
 	w.leverageSelect.SetSelected("2000:1")
 	w.instrumentSelect.SetSelected("EUR/USD")
 
-	// Set placeholders
-	w.availableMarginEntry.SetPlaceHolder("Available margin")
-	w.riskAmountHomeCurrency.SetPlaceHolder("Risk amount in account currency")
-	w.riskAmountPips.SetPlaceHolder("Risk amount in PIPs")
-	w.highPriceEntry.SetPlaceHolder("High price")
-	w.lowPriceEntry.SetPlaceHolder("Low price")
+	// Set all placeholders
+	w.availableMarginEntry.SetPlaceHolder("50")
+	w.riskAmountHomeCurrency.SetPlaceHolder("20")
+	w.riskAmountPips.SetPlaceHolder("5")
+	w.quoteHighPriceEntry.SetPlaceHolder("EUR/USD (high)")
+	w.quoteLowPriceEntry.SetPlaceHolder("EUR/USD (low)")
+	w.baseHighPriceEntry.SetPlaceHolder("EUR/USD (high)")
+	w.baseLowPriceEntry.SetPlaceHolder("EUR/USD (low)")
+
+	// Ensure entries are visible
+	w.baseHighPriceEntry.Show()
+	w.baseLowPriceEntry.Show()
+	w.quoteHighPriceEntry.Show()
+	w.quoteLowPriceEntry.Show()
 
 	return w
 }
@@ -119,7 +139,7 @@ func getPairNames() []string {
 func (ui *UI) setupCallbacks() {
 	w := ui.widgets
 
-	// Update price inputs when account currency or instrument changes
+	// Define updatePriceInputs but don't call it yet
 	updatePriceInputs := func() {
 		var selectedPair FXPair
 		for _, pair := range ui.fxPairs {
@@ -129,25 +149,66 @@ func (ui *UI) setupCallbacks() {
 			}
 		}
 
-		shouldDisable := selectedPair.baseCurrency == w.accountCurrencySelect.Selected
-		if shouldDisable {
-			w.highPriceEntry.Disable()
-			w.lowPriceEntry.Disable()
-			w.highPriceEntry.SetText("1.0")
-			w.lowPriceEntry.SetText("1.0")
+		// When base currency is home currency
+		if selectedPair.baseCurrency == w.accountCurrencySelect.Selected {
+			ui.baseContainer.Hide()
+			ui.quoteContainer.Show()
+			w.quoteHighPriceEntry.Enable()
+			w.quoteLowPriceEntry.Enable()
+			ui.quoteContainer.Objects[0].(*widget.Label).SetText(
+				fmt.Sprintf("Quote/Home Price [%s/%s]",
+					selectedPair.quoteCurrency,
+					w.accountCurrencySelect.Selected))
+			w.quoteHighPriceEntry.SetPlaceHolder(fmt.Sprintf("%s (high)", selectedPair.name))
+			w.quoteLowPriceEntry.SetPlaceHolder(fmt.Sprintf("%s (low)", selectedPair.name))
+		} else if selectedPair.quoteCurrency == w.accountCurrencySelect.Selected {
+			ui.baseContainer.Show()
+			ui.quoteContainer.Show()
+			w.baseHighPriceEntry.Enable()
+			w.baseLowPriceEntry.Enable()
+			w.quoteHighPriceEntry.Disable()
+			w.quoteLowPriceEntry.Disable()
+			w.quoteHighPriceEntry.SetText("1.0")
+			w.quoteLowPriceEntry.SetText("1.0")
+			ui.baseContainer.Objects[0].(*widget.Label).SetText(
+				fmt.Sprintf("Base/Home Price [%s/%s]",
+					selectedPair.baseCurrency,
+					w.accountCurrencySelect.Selected))
+			ui.quoteContainer.Objects[0].(*widget.Label).SetText(
+				fmt.Sprintf("Quote/Home Price [%s/%s]",
+					selectedPair.quoteCurrency,
+					w.accountCurrencySelect.Selected))
+			w.baseHighPriceEntry.SetPlaceHolder(fmt.Sprintf("%s (high)", selectedPair.name))
+			w.baseLowPriceEntry.SetPlaceHolder(fmt.Sprintf("%s (low)", selectedPair.name))
 		} else {
-			w.highPriceEntry.Enable()
-			w.lowPriceEntry.Enable()
-			w.highPriceEntry.SetText("")
-			w.lowPriceEntry.SetText("")
+			ui.baseContainer.Show()
+			ui.quoteContainer.Show()
+			w.baseHighPriceEntry.Enable()
+			w.baseLowPriceEntry.Enable()
+			w.quoteHighPriceEntry.Enable()
+			w.quoteLowPriceEntry.Enable()
+			ui.baseContainer.Objects[0].(*widget.Label).SetText(
+				fmt.Sprintf("Base/Home Price [%s/%s]",
+					selectedPair.baseCurrency,
+					w.accountCurrencySelect.Selected))
+			ui.quoteContainer.Objects[0].(*widget.Label).SetText(
+				fmt.Sprintf("Quote/Home Price [%s/%s]",
+					selectedPair.quoteCurrency,
+					w.accountCurrencySelect.Selected))
+			w.baseHighPriceEntry.SetPlaceHolder(fmt.Sprintf("%s/%s (high)", selectedPair.baseCurrency, w.accountCurrencySelect.Selected))
+			w.baseLowPriceEntry.SetPlaceHolder(fmt.Sprintf("%s/%s (low)", selectedPair.baseCurrency, w.accountCurrencySelect.Selected))
+			w.quoteHighPriceEntry.SetPlaceHolder(fmt.Sprintf("%s/%s (high)", selectedPair.quoteCurrency, w.accountCurrencySelect.Selected))
+			w.quoteLowPriceEntry.SetPlaceHolder(fmt.Sprintf("%s/%s (low)", selectedPair.quoteCurrency, w.accountCurrencySelect.Selected))
 		}
 	}
 
+	// Update on account currency change
 	w.accountCurrencySelect.OnChanged = func(s string) {
 		updatePriceInputs()
 		w.riskLabel.SetText(fmt.Sprintf("Risk Amount (%s)", s))
 	}
 
+	// Update on instrument change
 	w.instrumentSelect.OnChanged = func(s string) {
 		updatePriceInputs()
 	}
@@ -178,7 +239,36 @@ func (ui *UI) createLayout() {
 		),
 	)
 
-	// Trade parameters layout
+	// Create containers for base/quote currency inputs with corrected labels
+	ui.baseContainer = container.NewVBox(
+		widget.NewLabelWithStyle("Base/Home Price", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+		container.NewGridWithColumns(2,
+			container.NewVBox(
+				widget.NewLabelWithStyle("High", fyne.TextAlignLeading, fyne.TextStyle{Italic: true}),
+				w.baseHighPriceEntry,
+			),
+			container.NewVBox(
+				widget.NewLabelWithStyle("Low", fyne.TextAlignLeading, fyne.TextStyle{Italic: true}),
+				w.baseLowPriceEntry,
+			),
+		),
+	)
+
+	ui.quoteContainer = container.NewVBox(
+		widget.NewLabelWithStyle("Quote/Home Price", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+		container.NewGridWithColumns(2,
+			container.NewVBox(
+				widget.NewLabelWithStyle("High", fyne.TextAlignLeading, fyne.TextStyle{Italic: true}),
+				w.quoteHighPriceEntry,
+			),
+			container.NewVBox(
+				widget.NewLabelWithStyle("Low", fyne.TextAlignLeading, fyne.TextStyle{Italic: true}),
+				w.quoteLowPriceEntry,
+			),
+		),
+	)
+
+	// Trade parameters layout with base container first
 	tradeGroup := container.NewVBox(
 		container.NewVBox(
 			widget.NewLabelWithStyle("Instrument", fyne.TextAlignLeading, fyne.TextStyle{Italic: true}),
@@ -193,15 +283,9 @@ func (ui *UI) createLayout() {
 				widget.NewLabelWithStyle("Stop Loss (PIPs)", fyne.TextAlignLeading, fyne.TextStyle{Italic: true}),
 				w.riskAmountPips,
 			),
-			container.NewVBox(
-				widget.NewLabelWithStyle("High Price", fyne.TextAlignLeading, fyne.TextStyle{Italic: true}),
-				w.highPriceEntry,
-			),
-			container.NewVBox(
-				widget.NewLabelWithStyle("Low Price", fyne.TextAlignLeading, fyne.TextStyle{Italic: true}),
-				w.lowPriceEntry,
-			),
 		),
+		ui.baseContainer,  // Base first
+		ui.quoteContainer, // Quote second
 	)
 
 	// Results group
@@ -226,6 +310,34 @@ func (ui *UI) createLayout() {
 	)
 
 	ui.window.SetContent(content)
+
+	// Call updatePriceInputs after containers are created
+	ui.setupCallbacks()
+	ui.widgets.accountCurrencySelect.OnChanged(ui.widgets.accountCurrencySelect.Selected)
+
+	// Evaluate initial state
+	var selectedPair FXPair
+	for _, pair := range ui.fxPairs {
+		if pair.name == w.instrumentSelect.Selected {
+			selectedPair = pair
+			break
+		}
+	}
+
+	// Show/hide containers based on initial state
+	if selectedPair.quoteCurrency == w.accountCurrencySelect.Selected {
+		ui.baseContainer.Show()
+		ui.quoteContainer.Hide()
+	} else if selectedPair.baseCurrency == w.accountCurrencySelect.Selected {
+		ui.baseContainer.Hide()
+		ui.quoteContainer.Show()
+	} else {
+		ui.baseContainer.Show()
+		ui.quoteContainer.Show()
+	}
+
+	// Quote container is always shown
+	ui.quoteContainer.Show()
 }
 
 func (ui *UI) handleCalculate() {
@@ -240,14 +352,62 @@ func (ui *UI) handleCalculate() {
 	availableMargin, err1 := strconv.ParseFloat(w.availableMarginEntry.Text, 64)
 	riskAmount, err2 := strconv.ParseFloat(w.riskAmountHomeCurrency.Text, 64)
 	stopLoss, err3 := strconv.ParseFloat(w.riskAmountPips.Text, 64)
-	highPrice, err4 := strconv.ParseFloat(w.highPriceEntry.Text, 64)
-	lowPrice, err5 := strconv.ParseFloat(w.lowPriceEntry.Text, 64)
 
-	// Basic validation
-	if err1 != nil || err2 != nil || err3 != nil || err4 != nil || err5 != nil {
-		w.errorLabel.Text = "Please enter valid numbers"
-		hideResults()
-		return
+	// Get selected pair
+	var selectedPair FXPair
+	for _, pair := range ui.fxPairs {
+		if pair.name == w.instrumentSelect.Selected {
+			selectedPair = pair
+			break
+		}
+	}
+
+	// Debug output
+	fmt.Printf("Account Currency: %s\n", w.accountCurrencySelect.Selected)
+	fmt.Printf("Base Currency: %s\n", selectedPair.baseCurrency)
+	fmt.Printf("Quote Currency: %s\n", selectedPair.quoteCurrency)
+	fmt.Printf("Quote High Price Text: '%s'\n", w.quoteHighPriceEntry.Text)
+	fmt.Printf("Quote Low Price Text: '%s'\n", w.quoteLowPriceEntry.Text)
+
+	// Parse price inputs based on which are active
+	var baseHighPrice, baseLowPrice, quoteHighPrice, quoteLowPrice float64
+	var err4, err5, err6, err7 error
+
+	// Parse prices based on currency relationship
+	if selectedPair.quoteCurrency == w.accountCurrencySelect.Selected {
+		fmt.Println("Using quote=home currency logic")
+		baseHighPrice, err4 = strconv.ParseFloat(w.baseHighPriceEntry.Text, 64)
+		baseLowPrice, err5 = strconv.ParseFloat(w.baseLowPriceEntry.Text, 64)
+		quoteHighPrice = 1.0
+		quoteLowPrice = 1.0
+		if err1 != nil || err2 != nil || err3 != nil || err4 != nil || err5 != nil {
+			w.errorLabel.Text = "Please enter valid numbers"
+			w.errorLabel.Refresh()
+			hideResults()
+			return
+		}
+	} else if selectedPair.baseCurrency == w.accountCurrencySelect.Selected {
+		baseHighPrice = 1.0
+		baseLowPrice = 1.0
+		quoteHighPrice, err4 = strconv.ParseFloat(w.quoteHighPriceEntry.Text, 64)
+		quoteLowPrice, err5 = strconv.ParseFloat(w.quoteLowPriceEntry.Text, 64)
+		if err1 != nil || err2 != nil || err3 != nil || err4 != nil || err5 != nil {
+			w.errorLabel.Text = "Please enter valid numbers"
+			w.errorLabel.Refresh()
+			hideResults()
+			return
+		}
+	} else {
+		baseHighPrice, err4 = strconv.ParseFloat(w.baseHighPriceEntry.Text, 64)
+		baseLowPrice, err5 = strconv.ParseFloat(w.baseLowPriceEntry.Text, 64)
+		quoteHighPrice, err6 = strconv.ParseFloat(w.quoteHighPriceEntry.Text, 64)
+		quoteLowPrice, err7 = strconv.ParseFloat(w.quoteLowPriceEntry.Text, 64)
+		if err1 != nil || err2 != nil || err3 != nil || err4 != nil || err5 != nil || err6 != nil || err7 != nil {
+			w.errorLabel.Text = "Please enter valid numbers"
+			w.errorLabel.Refresh()
+			hideResults()
+			return
+		}
 	}
 
 	// Value validation
@@ -266,12 +426,12 @@ func (ui *UI) handleCalculate() {
 		hideResults()
 		return
 	}
-	if highPrice <= 0 || lowPrice <= 0 {
+	if baseHighPrice <= 0 || baseLowPrice <= 0 || quoteHighPrice <= 0 || quoteLowPrice <= 0 {
 		w.errorLabel.Text = "Prices must be positive"
 		hideResults()
 		return
 	}
-	if lowPrice > highPrice {
+	if baseLowPrice > baseHighPrice || quoteLowPrice > quoteHighPrice {
 		w.errorLabel.Text = "Low price cannot be higher than high price"
 		hideResults()
 		return
@@ -281,64 +441,90 @@ func (ui *UI) handleCalculate() {
 	leverageStr := strings.Split(w.leverageSelect.Selected, ":")[0]
 	leverage, _ := strconv.ParseFloat(leverageStr, 64)
 
-	// Get selected pair
-	var selectedPair FXPair
-	for _, pair := range ui.fxPairs {
-		if pair.name == w.instrumentSelect.Selected {
-			selectedPair = pair
-			break
-		}
+	// Calculate exchange rates for home currency conversion
+	var homeBaseRateHigh, homeBaseRateLow, homeQuoteRateHigh, homeQuoteRateLow float64
+
+	if selectedPair.baseCurrency == w.accountCurrencySelect.Selected {
+		homeBaseRateHigh = 1.0
+		homeBaseRateLow = 1.0
+		homeQuoteRateHigh = quoteHighPrice
+		homeQuoteRateLow = quoteLowPrice
+	} else if selectedPair.quoteCurrency == w.accountCurrencySelect.Selected {
+		homeBaseRateHigh = baseHighPrice
+		homeBaseRateLow = baseLowPrice
+		homeQuoteRateHigh = 1.0
+		homeQuoteRateLow = 1.0
+	} else {
+		homeBaseRateHigh = baseHighPrice
+		homeBaseRateLow = baseLowPrice
+		homeQuoteRateHigh = quoteHighPrice
+		homeQuoteRateLow = quoteLowPrice
 	}
 
-	homeQuoteRate := 1.0 // Simplified
+	// Debug logging
+	fmt.Printf("High Price Calculation:\n")
+	fmt.Printf("Base Price: %f\n", baseHighPrice)
+	fmt.Printf("Home Base Rate: %f\n", homeBaseRateHigh)
+	fmt.Printf("Home Quote Rate: %f\n", homeQuoteRateHigh)
+	fmt.Printf("Leverage: %f\n", leverage)
+	fmt.Printf("Available Margin: %f\n", availableMargin)
 
-	// Calculate positions using trade package
+	// Calculate for high price
 	highUnits, highPipValue, maxHighUnits, errMsg := trade.CalculatePositionDetails(
 		availableMargin, leverage, riskAmount,
-		highPrice, stopLoss, homeQuoteRate,
+		baseHighPrice, stopLoss,
+		homeBaseRateHigh, homeQuoteRateHigh,
+		selectedPair.baseCurrency,
+		selectedPair.quoteCurrency,
+		w.accountCurrencySelect.Selected,
+	)
+
+	fmt.Printf("Max Units High: %d\n", maxHighUnits)
+
+	if errMsg != "" {
+		w.errorLabel.Text = errMsg
+		w.errorLabel.Refresh()
+		hideResults()
+		return
+	}
+
+	// Calculate for low price
+	lowUnits, lowPipValue, maxLowUnits, errMsg := trade.CalculatePositionDetails(
+		availableMargin, leverage, riskAmount,
+		baseLowPrice, stopLoss,
+		homeBaseRateLow, homeQuoteRateLow,
+		selectedPair.baseCurrency,
 		selectedPair.quoteCurrency,
 		w.accountCurrencySelect.Selected,
 	)
 
 	if errMsg != "" {
 		w.errorLabel.Text = errMsg
+		w.errorLabel.Refresh()
 		hideResults()
 		return
 	}
 
-	// Check if position calculation was successful
-	if highUnits == 0 {
-		w.errorLabel.Text = "Position too small - try increasing risk pips or amount"
-		hideResults()
-		return
-	}
-	if highUnits < 100 {
-		w.errorLabel.Text = "Warning: Position size very small - consider increasing risk"
-	} else {
-		w.errorLabel.Text = "" // Clear any previous errors
-	}
-
-	lowUnits, lowPipValue, maxLowUnits, errMsg2 := trade.CalculatePositionDetails(
-		availableMargin, leverage, riskAmount,
-		lowPrice, stopLoss, homeQuoteRate,
-		selectedPair.quoteCurrency,
-		w.accountCurrencySelect.Selected,
-	)
-
-	if errMsg2 != "" {
-		w.errorLabel.Text = errMsg2
-		hideResults()
-		return
-	}
-
+	// Calculate average values
 	avgUnits := (highUnits + lowUnits) / 2
 	avgPipValue := (highPipValue + lowPipValue) / 2
-	maxUnits := (maxHighUnits + maxLowUnits) / 2
+	maxUnits := int((float64(maxHighUnits) + float64(maxLowUnits)) / 2.0)
 
-	// Always show all three position sizes
+	// Update max position label
+	w.maxPositionLabel.SetText(fmt.Sprintf("Maximum Position: %d units", maxUnits))
+
+	// Clear error message on successful calculation
+	w.errorLabel.Text = ""
+	w.errorLabel.Refresh()
+
+	// Show all positions for different currencies
 	w.highPositionLabel.Show()
 	w.lowPositionLabel.Show()
 	w.avgPositionLabel.Show()
+
+	w.highPositionLabel.SetText(fmt.Sprintf("Position Size [High Price]: %d units", highUnits))
+	w.avgPositionLabel.SetText(fmt.Sprintf("Position Size [Average Price]: %d units", avgUnits))
+	w.lowPositionLabel.SetText(fmt.Sprintf("Position Size [Low Price]: %d units", lowUnits))
 
 	showTradeDetails := func(units int, pipValue float64, basePrice float64, maxUnits int) {
 		marginUsed := (float64(units) * basePrice) / leverage
@@ -371,7 +557,7 @@ func (ui *UI) handleCalculate() {
 		w.avgPositionLabel.Show()
 		w.avgPositionLabel.SetText(fmt.Sprintf("Position Size: %d units", avgUnits))
 		w.avgPositionLabel.OnTapped = func() {
-			showTradeDetails(avgUnits, avgPipValue, (highPrice+lowPrice)/2, maxUnits)
+			showTradeDetails(avgUnits, avgPipValue, (baseHighPrice+baseLowPrice)/2, maxUnits)
 		}
 	} else {
 		// Show all positions for different currencies
@@ -384,13 +570,13 @@ func (ui *UI) handleCalculate() {
 		w.lowPositionLabel.SetText(fmt.Sprintf("Position Size [Low Price]: %d units", lowUnits))
 
 		w.highPositionLabel.OnTapped = func() {
-			showTradeDetails(highUnits, highPipValue, highPrice, maxHighUnits)
+			showTradeDetails(highUnits, highPipValue, baseHighPrice, int(maxHighUnits))
 		}
 		w.lowPositionLabel.OnTapped = func() {
-			showTradeDetails(lowUnits, lowPipValue, lowPrice, maxLowUnits)
+			showTradeDetails(lowUnits, lowPipValue, baseLowPrice, int(maxLowUnits))
 		}
 		w.avgPositionLabel.OnTapped = func() {
-			showTradeDetails(avgUnits, avgPipValue, (highPrice+lowPrice)/2, maxUnits)
+			showTradeDetails(avgUnits, avgPipValue, (baseHighPrice+baseLowPrice)/2, maxUnits)
 		}
 	}
 

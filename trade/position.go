@@ -1,5 +1,9 @@
 package trade
 
+import (
+	"strings"
+)
+
 // CalculatePositionDetails returns position size, pip value, max units, and error message
 func CalculatePositionDetails(
 	// Account parameters
@@ -8,17 +12,19 @@ func CalculatePositionDetails(
 	riskAmount,
 
 	// Price parameters
-	basePrice,
+	price,
 	stopLossPips,
+	homeRate,
 	homeQuoteRate float64,
 
 	// Currency parameters
+	baseCurrency,
 	quoteCurrency,
 	homeCurrency string,
 ) (int, float64, int, string) {
 	// Calculate pip value in quote currency
 	pipValue := 0.0001
-	if quoteCurrency == "JPY" {
+	if quoteCurrency == "JPY" || strings.HasSuffix(quoteCurrency, "JPY") {
 		pipValue = 0.01
 	} else if quoteCurrency == "XAU" {
 		pipValue = 0.1
@@ -28,18 +34,24 @@ func CalculatePositionDetails(
 	stopLossDistance := stopLossPips * pipValue
 
 	// Calculate position size based on risk
-	positionSize := riskAmount / (stopLossDistance * homeQuoteRate)
+	riskInQuoteCurrency := riskAmount / homeQuoteRate
+	positionSize := riskInQuoteCurrency / stopLossDistance
 
 	// Calculate maximum position size based on remaining margin
 	remainingMargin := availableMargin - riskAmount
 	marginRate := 1 / leverage
-	var baseToHomeRate float64
-	if quoteCurrency == homeCurrency {
-		baseToHomeRate = basePrice
+
+	// Calculate margin requirement in account currency
+	var marginRequirement float64
+	if baseCurrency == homeCurrency {
+		marginRequirement = price / homeQuoteRate
+	} else if quoteCurrency == homeCurrency {
+		marginRequirement = price
 	} else {
-		baseToHomeRate = basePrice * homeQuoteRate
+		marginRequirement = price * homeRate
 	}
-	maxUnits := remainingMargin / (marginRate * baseToHomeRate)
+
+	maxUnits := remainingMargin / (marginRate * marginRequirement)
 
 	// Check if we can achieve the desired risk
 	actualPipValue := (pipValue * float64(int(positionSize)) * homeQuoteRate)

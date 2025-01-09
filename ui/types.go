@@ -15,9 +15,11 @@ type FXPair struct {
 
 // UI holds all the UI components and state
 type UI struct {
-	window  fyne.Window
-	fxPairs []FXPair
-	widgets *Widgets
+	window         fyne.Window
+	fxPairs        []FXPair
+	widgets        *Widgets
+	baseContainer  *fyne.Container
+	quoteContainer *fyne.Container
 }
 
 // Widgets holds all the UI widgets
@@ -40,4 +42,10 @@ type Widgets struct {
 	maxPositionLabel  *widget.Label
 	pipValueLabel     *widget.Label
 	riskLabel         *widget.Label
+
+	// Additional price inputs for cross rates
+	baseHighPriceEntry  *widget.Entry
+	baseLowPriceEntry   *widget.Entry
+	quoteHighPriceEntry *widget.Entry
+	quoteLowPriceEntry  *widget.Entry
 }
