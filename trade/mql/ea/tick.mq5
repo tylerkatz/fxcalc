@@ -166,16 +166,23 @@ void DrawVirtualTrade(bool isLong, double entryPrice, double stopLoss, double ta
         ObjectSetInteger(0, askLineName, OBJPROP_SELECTED, false);
         ObjectSetInteger(0, askLineName, OBJPROP_BACK, true);
         
-        // Add price label to ASK line - far right
+        // Add price label to ASK line - far right and slightly below
         string askPriceName = prefix + "_ASK_Price";
-        datetime rightmostTime = (datetime)ChartGetInteger(0, CHART_FIRST_VISIBLE_BAR) + 
-                                (datetime)ChartGetInteger(0, CHART_VISIBLE_BARS);
-        datetime timeOffsetRight = rightmostTime + (PeriodSeconds() * 20);  // Move further right
-        ObjectCreate(0, askPriceName, OBJ_TEXT, 0, timeOffsetRight, ask);
+        datetime currentTime = TimeCurrent();
+        datetime timeOffsetRight = currentTime + (PeriodSeconds() * 11);
+        
+        // Calculate offset based on chart's visible price range
+        double upperPrice = ChartGetDouble(0, CHART_PRICE_MAX);
+        double lowerPrice = ChartGetDouble(0, CHART_PRICE_MIN);
+        double priceRange = upperPrice - lowerPrice;
+        double verticalOffset = priceRange * 0.015;  // 1.5% of visible price range
+        
+        ObjectCreate(0, askPriceName, OBJ_TEXT, 0, timeOffsetRight, ask - verticalOffset);
         ObjectSetString(0, askPriceName, OBJPROP_TEXT, StringFormat("ASK: %f", ask));
         ObjectSetInteger(0, askPriceName, OBJPROP_COLOR, clrRed);
-        ObjectSetInteger(0, askPriceName, OBJPROP_ANCHOR, ANCHOR_RIGHT);
+        ObjectSetInteger(0, askPriceName, OBJPROP_ANCHOR, ANCHOR_LEFT);
         ObjectSetInteger(0, askPriceName, OBJPROP_BACK, false);
+        ObjectSetInteger(0, askPriceName, OBJPROP_FONTSIZE, 7);
     }
     
     // Draw using visual prices
@@ -424,25 +431,37 @@ void OnTick()
     // Update ASK line and price if we have an active short virtual trade
     if(IsTestMode && virtualTradeCount > 0 && !currentVirtualTrade.isLong)
     {
-        string askLineName = "VirtualTrade_0_ASK";
-        string askPriceName = "VirtualTrade_0_ASK_Price";
-        string slPipText = "VirtualTrade_0_SL_Pips";
-        string tpPipText = "VirtualTrade_0_TP_Pips";
+        string prefix = "VirtualTrade_0";  // First virtual trade
+        string askLineName = prefix + "_ASK";
+        string askPriceName = prefix + "_ASK_Price";
+        string slPipText = prefix + "_SL_Pips";
+        string tpPipText = prefix + "_TP_Pips";
         double currentAsk = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-        double currentBid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
         
-        // Update ASK line and price
+        // Update ASK line with same properties
         ObjectSetDouble(0, askLineName, OBJPROP_PRICE, currentAsk);
-        datetime rightmostTime = (datetime)ChartGetInteger(0, CHART_FIRST_VISIBLE_BAR) + 
-                                (datetime)ChartGetInteger(0, CHART_VISIBLE_BARS);
-        datetime timeOffsetRight = rightmostTime + (PeriodSeconds() * 20);
-        ObjectSetDouble(0, askPriceName, OBJPROP_PRICE, currentAsk);
+        ObjectSetInteger(0, askLineName, OBJPROP_COLOR, clrRed);
+        ObjectSetInteger(0, askLineName, OBJPROP_STYLE, STYLE_DOT);
+        ObjectSetInteger(0, askLineName, OBJPROP_WIDTH, 1);
+        ObjectSetInteger(0, askLineName, OBJPROP_BACK, true);
+        
+        // Update ASK price label with same properties
+        datetime currentTime = TimeCurrent();
+        datetime timeOffsetRight = currentTime + (PeriodSeconds() * 11);
+        
+        // Calculate offset based on chart's visible price range
+        double upperPrice = ChartGetDouble(0, CHART_PRICE_MAX);
+        double lowerPrice = ChartGetDouble(0, CHART_PRICE_MIN);
+        double priceRange = upperPrice - lowerPrice;
+        double verticalOffset = priceRange * 0.015;  // 1.5% of visible price range
+        
+        ObjectSetDouble(0, askPriceName, OBJPROP_PRICE, currentAsk - verticalOffset);
         ObjectSetString(0, askPriceName, OBJPROP_TEXT, StringFormat("ASK: %f", currentAsk));
         ObjectSetInteger(0, askPriceName, OBJPROP_TIME, timeOffsetRight);
-        
-        // Update distances with new time offset
-        datetime currentTime = TimeCurrent();
-        datetime timeOffset = currentTime + (PeriodSeconds() * 4);  // Changed from 2 to 4
+        ObjectSetInteger(0, askPriceName, OBJPROP_COLOR, clrRed);
+        ObjectSetInteger(0, askPriceName, OBJPROP_ANCHOR, ANCHOR_LEFT);
+        ObjectSetInteger(0, askPriceName, OBJPROP_BACK, false);
+        ObjectSetInteger(0, askPriceName, OBJPROP_FONTSIZE, 7);
         
         // Use stored values for distances
         ObjectSetString(0, slPipText, OBJPROP_TEXT, StringFormat("%.1f pips (%.1f pips)", 
