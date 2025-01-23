@@ -78,8 +78,6 @@ void DrawVirtualTrade(bool isLong, double entryPrice, double stopLoss, double ta
         return;
     }
     
-    Print("DEBUG - DrawVirtualTrade - Starting new trade");
-    
     // Calculate proper entry, SL and TP prices considering spread
     double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
     double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
@@ -105,7 +103,6 @@ void DrawVirtualTrade(bool isLong, double entryPrice, double stopLoss, double ta
         currentVirtualTrade.isLong = isLong;
         currentVirtualTrade.lots = lots;
         currentVirtualTrade.isActive = true;
-        Print("DEBUG - Long trade activated");
         
         // For longs, we don't draw the ASK line
     }
@@ -157,7 +154,6 @@ void DrawVirtualTrade(bool isLong, double entryPrice, double stopLoss, double ta
         currentVirtualTrade.visualTP = visualTP;
         currentVirtualTrade.isLong = false;
         currentVirtualTrade.isActive = true;
-        Print("DEBUG - Short trade activated");
         
         // Draw ASK line with price label - using TP color for shorts
         string prefix = "VirtualTrade_" + IntegerToString(virtualTradeCount);
@@ -182,7 +178,7 @@ void DrawVirtualTrade(bool isLong, double entryPrice, double stopLoss, double ta
         double verticalOffset = priceRange * 0.015;  // 1.5% of visible price range
         
         ObjectCreate(0, askPriceName, OBJ_TEXT, 0, timeOffsetRight, ask - verticalOffset);
-        ObjectSetString(0, askPriceName, OBJPROP_TEXT, StringFormat("ASK: %f", ask));
+        ObjectSetString(0, askPriceName, OBJPROP_TEXT, StringFormat("ASK: %.*f", symbolDigits, ask));
         ObjectSetInteger(0, askPriceName, OBJPROP_COLOR, C'0,33,165');  // Changed to TP blue color
         ObjectSetInteger(0, askPriceName, OBJPROP_ANCHOR, ANCHOR_LEFT);
         ObjectSetInteger(0, askPriceName, OBJPROP_BACK, false);
@@ -285,7 +281,6 @@ void DrawVirtualTrade(bool isLong, double entryPrice, double stopLoss, double ta
     ObjectSetInteger(0, labelName, OBJPROP_YDISTANCE, 20 + (virtualTradeCount * 100));
     
     virtualTradeCount++;
-    Print("DEBUG - Trade creation complete - isActive: ", currentVirtualTrade.isActive);
 }
 
 //+------------------------------------------------------------------+
@@ -294,63 +289,40 @@ void DrawVirtualTrade(bool isLong, double entryPrice, double stopLoss, double ta
 void CheckVirtualTrade()
 {
     if(!currentVirtualTrade.isActive) {
-        Print("DEBUG - Trade not active");
         return;
     }
+    
+    static datetime lastUpdate = 0;
+    datetime currentTime = TimeCurrent();
         
     double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
     double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
     
-    // Debug logging every tick for shorts
-    if(!currentVirtualTrade.isLong) {
-        Print("DEBUG - Short Trade Check:");
-        Print("ASK: ", ask);
-        Print("SL Level: ", currentVirtualTrade.stopLoss);
-        Print("TP Level: ", currentVirtualTrade.takeProfit);
-        Print("Is Active: ", currentVirtualTrade.isActive);
-        Print("ASK >= SL?: ", (ask >= currentVirtualTrade.stopLoss));
-        Print("Difference: ", ask - currentVirtualTrade.stopLoss, " points");
-        Print("isLong: ", currentVirtualTrade.isLong);
-        
-        // Add explicit comparison with full precision
-        if(ask >= currentVirtualTrade.stopLoss) {
-            Print("SL CHECK TRIGGERED!");
-            Print("ASK: ", DoubleToString(ask, 8));
-            Print("SL:  ", DoubleToString(currentVirtualTrade.stopLoss, 8));
+    // Print trade status every 30 seconds
+    if(currentTime - lastUpdate >= 30)
+    {
+        if(!currentVirtualTrade.isLong) {
+            Print("SHORT - Current: ", ask, " | SL: ", currentVirtualTrade.stopLoss, " | TP: ", currentVirtualTrade.takeProfit);
+        } else {
+            Print("LONG - Current: ", bid, " | SL: ", currentVirtualTrade.stopLoss, " | TP: ", currentVirtualTrade.takeProfit);
         }
-    }
-    
-    // Only log every 30 seconds using static variable
-    static datetime lastLogTime = 0;
-    datetime currentTime = TimeCurrent();
-    
-    if(currentTime >= lastLogTime + 30) {
-        Print("Trade Status:");
-        Print("Current ASK: ", ask);
-        Print("Current BID: ", bid);
-        Print("TP Level: ", currentVirtualTrade.takeProfit);
-        Print("SL Level: ", currentVirtualTrade.stopLoss);
-        lastLogTime = currentTime;
+        lastUpdate = currentTime;
     }
     
     if(!currentVirtualTrade.isLong)  // Short position
     {
         if(ask >= currentVirtualTrade.stopLoss)
         {
-            Print("SL HIT! ASK(", ask, ") >= SL(", currentVirtualTrade.stopLoss, ")");
-            Print("TRADE EXIT - Stop Loss");
-            Print("Entry: ", currentVirtualTrade.entryPrice);
-            Print("Exit: ", ask);
-            Print("Loss: ", (ask - currentVirtualTrade.entryPrice) / pipValue, " pips");
+            double pipLoss = (ask - currentVirtualTrade.entryPrice) / pipValue;
+            Print("TRADE EXIT - Stop Loss: -", pipLoss, " pips");
             
-            // Create exit X at ASK level
             string prefix = "VirtualTrade_" + IntegerToString(virtualTradeCount-1);
-            ObjectCreate(0, prefix + "_Exit", OBJ_ARROW_STOP, 0, TimeCurrent(), ask);
+            ObjectCreate(0, prefix + "_Exit", OBJ_TEXT, 0, TimeCurrent(), ask);
+            ObjectSetString(0, prefix + "_Exit", OBJPROP_TEXT, StringFormat("X (%.1f)", pipLoss));
             ObjectSetInteger(0, prefix + "_Exit", OBJPROP_COLOR, clrRed);
-            ObjectSetInteger(0, prefix + "_Exit", OBJPROP_WIDTH, 2);
-            ObjectSetInteger(0, prefix + "_Exit", OBJPROP_SELECTABLE, false);
+            ObjectSetInteger(0, prefix + "_Exit", OBJPROP_FONTSIZE, 8);
+            ObjectSetInteger(0, prefix + "_Exit", OBJPROP_ANCHOR, ANCHOR_LEFT);
             
-            // Clear trade but keep entry arrow and exit symbol
             currentVirtualTrade.isActive = false;
             DeleteVirtualTradeObjectsExceptArrows();
             Sleep(5000);
@@ -358,20 +330,16 @@ void CheckVirtualTrade()
         }
         if(ask <= currentVirtualTrade.takeProfit)
         {
-            Print("TP HIT! ASK(", ask, ") <= TP(", currentVirtualTrade.takeProfit, ")");
-            Print("TRADE EXIT - Take Profit");
-            Print("Entry: ", currentVirtualTrade.entryPrice);
-            Print("Exit: ", ask);
-            Print("Profit: ", (currentVirtualTrade.entryPrice - ask) / pipValue, " pips");
+            double pipProfit = (currentVirtualTrade.entryPrice - ask) / pipValue;
+            Print("TRADE EXIT - Take Profit: +", pipProfit, " pips");
             
-            // Create checkmark at ASK level
             string prefix = "VirtualTrade_" + IntegerToString(virtualTradeCount-1);
-            ObjectCreate(0, prefix + "_Exit", OBJ_ARROW_CHECK, 0, TimeCurrent(), ask);
+            ObjectCreate(0, prefix + "_Exit", OBJ_TEXT, 0, TimeCurrent(), ask);
+            ObjectSetString(0, prefix + "_Exit", OBJPROP_TEXT, StringFormat("√ (+%.1f)", pipProfit));
             ObjectSetInteger(0, prefix + "_Exit", OBJPROP_COLOR, clrGreen);
-            ObjectSetInteger(0, prefix + "_Exit", OBJPROP_WIDTH, 2);
-            ObjectSetInteger(0, prefix + "_Exit", OBJPROP_SELECTABLE, false);
+            ObjectSetInteger(0, prefix + "_Exit", OBJPROP_FONTSIZE, 8);
+            ObjectSetInteger(0, prefix + "_Exit", OBJPROP_ANCHOR, ANCHOR_LEFT);
             
-            // Clear trade but keep entry arrow and exit symbol
             currentVirtualTrade.isActive = false;
             DeleteVirtualTradeObjectsExceptArrows();
             Sleep(5000);
@@ -382,18 +350,15 @@ void CheckVirtualTrade()
     {
         if(bid <= currentVirtualTrade.stopLoss)
         {
-            Print("SL HIT! BID(", bid, ") <= SL(", currentVirtualTrade.stopLoss, ")");
-            Print("TRADE EXIT - Stop Loss");
-            Print("Entry: ", currentVirtualTrade.entryPrice);
-            Print("Exit: ", bid);
-            Print("Loss: ", (currentVirtualTrade.entryPrice - bid) / pipValue, " pips");
+            double pipLoss = (currentVirtualTrade.entryPrice - bid) / pipValue;
+            Print("TRADE EXIT - Stop Loss: ", pipLoss, " pips");
             
-            // Create exit X at ASK level
             string prefix = "VirtualTrade_" + IntegerToString(virtualTradeCount-1);
-            ObjectCreate(0, prefix + "_Exit", OBJ_ARROW_STOP, 0, TimeCurrent(), bid);
+            ObjectCreate(0, prefix + "_Exit", OBJ_TEXT, 0, TimeCurrent(), bid);
+            ObjectSetString(0, prefix + "_Exit", OBJPROP_TEXT, StringFormat("X (%.1f)", pipLoss));
             ObjectSetInteger(0, prefix + "_Exit", OBJPROP_COLOR, clrRed);
-            ObjectSetInteger(0, prefix + "_Exit", OBJPROP_WIDTH, 2);
-            ObjectSetInteger(0, prefix + "_Exit", OBJPROP_SELECTABLE, false);
+            ObjectSetInteger(0, prefix + "_Exit", OBJPROP_FONTSIZE, 8);
+            ObjectSetInteger(0, prefix + "_Exit", OBJPROP_ANCHOR, ANCHOR_LEFT);
             
             currentVirtualTrade.isActive = false;
             DeleteVirtualTradeObjectsExceptArrows();
@@ -402,18 +367,15 @@ void CheckVirtualTrade()
         }
         if(bid >= currentVirtualTrade.takeProfit)
         {
-            Print("TP HIT! BID(", bid, ") >= TP(", currentVirtualTrade.takeProfit, ")");
-            Print("TRADE EXIT - Take Profit");
-            Print("Entry: ", currentVirtualTrade.entryPrice);
-            Print("Exit: ", bid);
-            Print("Profit: ", (bid - currentVirtualTrade.entryPrice) / pipValue, " pips");
+            double pipProfit = (bid - currentVirtualTrade.entryPrice) / pipValue;
+            Print("TRADE EXIT - Take Profit: +", pipProfit, " pips");
             
-            // Create checkmark at ASK level
             string prefix = "VirtualTrade_" + IntegerToString(virtualTradeCount-1);
-            ObjectCreate(0, prefix + "_Exit", OBJ_ARROW_CHECK, 0, TimeCurrent(), bid);
+            ObjectCreate(0, prefix + "_Exit", OBJ_TEXT, 0, TimeCurrent(), bid);
+            ObjectSetString(0, prefix + "_Exit", OBJPROP_TEXT, StringFormat("√ (+%.1f)", pipProfit));
             ObjectSetInteger(0, prefix + "_Exit", OBJPROP_COLOR, clrGreen);
-            ObjectSetInteger(0, prefix + "_Exit", OBJPROP_WIDTH, 2);
-            ObjectSetInteger(0, prefix + "_Exit", OBJPROP_SELECTABLE, false);
+            ObjectSetInteger(0, prefix + "_Exit", OBJPROP_FONTSIZE, 8);
+            ObjectSetInteger(0, prefix + "_Exit", OBJPROP_ANCHOR, ANCHOR_LEFT);
             
             currentVirtualTrade.isActive = false;
             DeleteVirtualTradeObjectsExceptArrows();
@@ -475,9 +437,7 @@ void OnTick()
 {
     // First check if existing virtual trade hit any levels
     if(IsTestMode) {
-        Print("DEBUG - OnTick - Before CheckVirtualTrade - isActive: ", currentVirtualTrade.isActive);
         CheckVirtualTrade();
-        Print("DEBUG - OnTick - After CheckVirtualTrade - isActive: ", currentVirtualTrade.isActive);
     }
     
     // Update ASK line and price if we have an active short virtual trade
@@ -490,27 +450,26 @@ void OnTick()
         string tpPipText = prefix + "_TP_Pips";
         double currentAsk = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
         
-        // Update ASK line with same properties - using TP blue color
+        // Update ASK line with same properties
         ObjectSetDouble(0, askLineName, OBJPROP_PRICE, currentAsk);
-        ObjectSetInteger(0, askLineName, OBJPROP_COLOR, C'0,33,165');  // Changed to TP blue color
+        ObjectSetInteger(0, askLineName, OBJPROP_COLOR, C'0,33,165');
         ObjectSetInteger(0, askLineName, OBJPROP_STYLE, STYLE_DOT);
         ObjectSetInteger(0, askLineName, OBJPROP_WIDTH, 1);
         ObjectSetInteger(0, askLineName, OBJPROP_BACK, true);
         
-        // Update ASK price label with same properties
+        // Update ASK price label with one digit after pip decimal
         datetime currentTime = TimeCurrent();
         datetime timeOffsetRight = currentTime + (PeriodSeconds() * 11);
         
-        // Calculate offset based on chart's visible price range
         double upperPrice = ChartGetDouble(0, CHART_PRICE_MAX);
         double lowerPrice = ChartGetDouble(0, CHART_PRICE_MIN);
         double priceRange = upperPrice - lowerPrice;
-        double verticalOffset = priceRange * 0.015;  // 1.5% of visible price range
+        double verticalOffset = priceRange * 0.015;
         
         ObjectSetDouble(0, askPriceName, OBJPROP_PRICE, currentAsk - verticalOffset);
-        ObjectSetString(0, askPriceName, OBJPROP_TEXT, StringFormat("ASK: %f", currentAsk));
+        ObjectSetString(0, askPriceName, OBJPROP_TEXT, StringFormat("ASK: %.*f", symbolDigits, currentAsk));
         ObjectSetInteger(0, askPriceName, OBJPROP_TIME, timeOffsetRight);
-        ObjectSetInteger(0, askPriceName, OBJPROP_COLOR, C'0,33,165');  // Changed to TP blue color
+        ObjectSetInteger(0, askPriceName, OBJPROP_COLOR, C'0,33,165');
         ObjectSetInteger(0, askPriceName, OBJPROP_ANCHOR, ANCHOR_LEFT);
         ObjectSetInteger(0, askPriceName, OBJPROP_BACK, false);
         ObjectSetInteger(0, askPriceName, OBJPROP_FONTSIZE, 7);
