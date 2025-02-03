@@ -32,21 +32,23 @@ CTrade        trade;                        // Trading object
 double        point;                        // Point value
 int           symbolDigits;                 // Digits in price
 double        pipValue;                     // Value of one pip
-double          initialChartRange = 0;      // Store initial chart range
-double          initialOffsetSize = 0;      // Store initial offset size
-bool hasHitTakeProfit = false;  // Flag to track if any level has hit TP
+double        initialChartRange = 0;        // Store initial chart range
+double        initialOffsetSize = 0;        // Store initial offset size
+bool          hasHitTakeProfit = false;     // Flag to track if any level has hit TP
+bool          maxLevelReached = false;      // Flag to track if max level is reached
 
 struct HedgeLevel {
-    int ticket;         // Order ticket
-    bool isLong;       // Direction
-    double entryPrice; // Entry price
-    double stopLoss;   // Stop loss price
-    double takeProfit; // Take profit price
-    double volume;     // Volume in lots
-    bool isActive;     // Whether this level is active
-    datetime exitTime; // Time when the level exited (0 if not exited)
-    double exitPrice; // Price at which the level exited
-    bool statusChanged;  // New field to track status changes
+    ulong ticket;         // Order ticket
+    ulong positionTicket; // Position ticket (when order is triggered)
+    bool isLong;         // Direction
+    double entryPrice;   // Entry price
+    double stopLoss;     // Stop loss price
+    double takeProfit;   // Take profit price
+    double volume;       // Volume in lots
+    bool isActive;       // Whether this level is active
+    datetime exitTime;   // Time when the level exited (0 if not exited)
+    double exitPrice;    // Price at which the level exited
+    bool statusChanged;  // Track status changes
 };
 
 HedgeLevel hedgeLevels[5];  // Array to store up to 5 hedge levels
@@ -137,7 +139,6 @@ void UpdatePriceLabels(int level)
     
     // If level has exited, ensure label stays at exit point
     if(hedgeLevels[level].exitTime > 0) {
-        if(level == 1) Print("Level 2 Label Update (Exited) - Exit Time: ", TimeToString(hedgeLevels[level].exitTime));
         double exitDollarValue = CalculateDollarValue(hedgeLevels[level].exitPrice, 
                                                     hedgeLevels[level].entryPrice,
                                                     hedgeLevels[level].isLong,
@@ -178,11 +179,6 @@ void UpdatePriceLabels(int level)
     // Calculate label time position (2 candles into the future)
     datetime currentTime = TimeCurrent();
     datetime labelTime = currentTime + (PeriodSeconds(PERIOD_CURRENT) * 2);
-    
-    if(level == 1 && hedgeLevels[level].isActive) {
-        Print("Level 2 Label Position - Current: ", TimeToString(currentTime),
-              " Label: ", TimeToString(labelTime));
-    }
     
     // Update active level labels
     if(ObjectFind(0, slLabelName) >= 0) {
@@ -362,12 +358,6 @@ void ProcessTradingLogic()
 
 void UpdateVisualization()
 {
-    if(TimeCurrent() - lastVisualizationUpdate < VISUALIZATION_UPDATE_INTERVAL) {
-        return;
-    }
-    
-    lastVisualizationUpdate = TimeCurrent();
-    
     // Calculate base prices
     double baseEntry = hedgeLevels[0].entryPrice;
     double channelEntry = baseEntry - MathAbs(Channel) * pipValue;
@@ -376,14 +366,6 @@ void UpdateVisualization()
     DrawLine("Channel_Upper", baseEntry, clrGray, STYLE_SOLID, 1);
     DrawLine("Channel_Lower", channelEntry, clrGray, STYLE_SOLID, 1);
     
-    // Debug Level 2 state
-    if(hedgeLevels[1].ticket > 0 || hedgeLevels[1].isActive) {
-        Print("Level 2 Debug - Ticket: ", hedgeLevels[1].ticket,
-              " Active: ", hedgeLevels[1].isActive,
-              " Entry: ", hedgeLevels[1].entryPrice,
-              " ExitTime: ", hedgeLevels[1].exitTime);
-    }
-    
     // Draw levels
     for(int i=0; i<5; i++) {
         string prefix = "Level_" + IntegerToString(i+1);
@@ -391,8 +373,6 @@ void UpdateVisualization()
         
         // Draw if level has a ticket or is active and hasn't exited
         if((hedgeLevels[i].ticket > 0 || hedgeLevels[i].isActive) && hedgeLevels[i].exitTime == 0) {
-            if(i == 1) Print("Drawing Level 2 - Entry Price: ", hedgeLevels[i].entryPrice);
-            
             // Draw entry line
             DrawLine(prefix + "_Entry", hedgeLevels[i].entryPrice, levelColor, STYLE_SOLID, 2);
             
@@ -401,7 +381,6 @@ void UpdateVisualization()
             DrawLine(prefix + "_TP", hedgeLevels[i].takeProfit, levelColor, STYLE_DASH, 1);
         }
         else {
-            if(i == 1) Print("Deleting Level 2 Lines");
             ObjectDelete(0, prefix + "_Entry");
             ObjectDelete(0, prefix + "_SL");
             ObjectDelete(0, prefix + "_TP");
@@ -465,15 +444,11 @@ void OpenInitialTrade()
         
         Print("Level 1 details stored and labels created");
         
-        // Calculate Level 2 entry price
-        double pendingPrice = isLong ? 
-            entryPrice - MathAbs(Channel) * pipValue :  // Sell Stop below for long
-            entryPrice + MathAbs(Channel) * pipValue;   // Buy Stop above for short
-            
-        Print("Attempting to place Level 2 order at price: ", pendingPrice);
-        
-        // Place Level 2 pending order
-        PlacePendingOrder(1, !isLong, entryPrice);  // Pass original entry price as base
+        // Only place Level 2 order initially
+        if(hedgeLevels[0].isActive) {
+            double level2Entry = hedgeLevels[0].entryPrice + (Channel * pipValue * (hedgeLevels[0].isLong ? -1 : 1));
+            PlacePendingOrder(1, !hedgeLevels[0].isLong, level2Entry);
+        }
         
         isInitialTradeOpen = true;
         Print("Initial trade setup completed");
@@ -485,64 +460,86 @@ void OpenInitialTrade()
 //+------------------------------------------------------------------+
 //| Place pending order for next level                                |
 //+------------------------------------------------------------------+
-void PlacePendingOrder(int level, bool isLong, double baseEntryPrice)
+void PlacePendingOrder(int level, bool isLong, double entryPrice)
 {
-    // Don't place new orders if TP has been hit
-    if(hasHitTakeProfit) {
-        return;
+    double volume = 0.0;
+    double sl = 0.0;
+    double tp = 0.0;
+    
+    // Get volume and prices based on level
+    switch(level) {
+        case 1: 
+            volume = Level2Volume; 
+            sl = Level2SL; 
+            tp = Level2TP; 
+            Print("Setting up Level 2 - Volume: ", volume, " SL: ", sl, " TP: ", tp);
+            break;
+        case 2: 
+            volume = Level3Volume; 
+            sl = Level3SL; 
+            tp = Level3TP;
+            Print("Setting up Level 3 - Volume: ", volume, " SL: ", sl, " TP: ", tp);
+            break;
+        case 3: 
+            volume = Level4Volume; 
+            sl = Level4SL; 
+            tp = Level4TP;
+            Print("Setting up Level 4 - Volume: ", volume, " SL: ", sl, " TP: ", tp);
+            break;
+        case 4: 
+            volume = Level5Volume; 
+            sl = Level5SL; 
+            tp = Level5TP;
+            Print("Setting up Level 5 - Volume: ", volume, " SL: ", sl, " TP: ", tp);
+            break;
+        default: return;
     }
     
-    if(level >= 5) return;
+    // Direction alternates from previous level
+    bool nextIsLong = !hedgeLevels[level-1].isLong;
     
-    double channelEntry = baseEntryPrice - MathAbs(Channel) * pipValue;
-    double entryPrice = (level % 2 == 1) ? channelEntry : baseEntryPrice;
+    // Calculate entry price based on previous level's entry
+    double nextEntryPrice = nextIsLong ? 
+        hedgeLevels[level-1].entryPrice + MathAbs(Channel) * pipValue :
+        hedgeLevels[level-1].entryPrice - MathAbs(Channel) * pipValue;
     
-    double volume = level == 1 ? Level2Volume :
-                   level == 2 ? Level3Volume :
-                   level == 3 ? Level4Volume :
-                   Level5Volume;
-                   
-    double slPips = level == 1 ? Level2SL :
-                    level == 2 ? Level3SL :
-                    level == 3 ? Level4SL :
-                    Level5SL;
-                    
-    double tpPips = level == 1 ? Level2TP :
-                    level == 2 ? Level3TP :
-                    level == 3 ? Level4TP :
-                    Level5TP;
+    // Calculate SL/TP prices
+    if(nextIsLong) {
+        sl = nextEntryPrice - sl * pipValue;
+        tp = nextEntryPrice + tp * pipValue;
+    } else {
+        sl = nextEntryPrice + sl * pipValue;
+        tp = nextEntryPrice - tp * pipValue;
+    }
     
-    double sl = isLong ? entryPrice - slPips * pipValue : entryPrice + slPips * pipValue;
-    double tp = isLong ? entryPrice + tpPips * pipValue : entryPrice - tpPips * pipValue;
+    Print("Placing Level ", level + 1, " Order - Type: ", (nextIsLong ? "Buy Stop" : "Sell Stop"), 
+          " Entry: ", nextEntryPrice,
+          " SL: ", sl,
+          " TP: ", tp);
     
-    ENUM_ORDER_TYPE orderType = isLong ? ORDER_TYPE_BUY_STOP : ORDER_TYPE_SELL_STOP;
+    // Place the order
+    trade.SetExpertMagicNumber(123456);
+    if(nextIsLong) {
+        trade.BuyStop(volume, nextEntryPrice, _Symbol, sl, tp, 0, 0, "Hedge Level " + IntegerToString(level + 1));
+    } else {
+        trade.SellStop(volume, nextEntryPrice, _Symbol, sl, tp, 0, 0, "Hedge Level " + IntegerToString(level + 1));
+    }
     
-    if(level == 1) Print("Placing Level 2 Order - Type: ", (isLong ? "Buy Stop" : "Sell Stop"), 
-                         " Entry: ", entryPrice);
+    // Store the ticket number
+    ulong ticket = trade.ResultOrder();
+    Print("Level ", level + 1, " Order Placed - Ticket: ", ticket);
     
-    int ticket = trade.OrderOpen(_Symbol,
-                               orderType,
-                               volume,
-                               entryPrice,
-                               entryPrice,
-                               sl,
-                               tp,
-                               ORDER_TIME_GTC,
-                               0,
-                               "Hedge Level " + IntegerToString(level + 1));
-                               
     if(ticket > 0) {
-        if(level == 1) Print("Level 2 Order Placed - Ticket: ", ticket);
-        
         hedgeLevels[level].ticket = ticket;
-        hedgeLevels[level].isLong = isLong;
-        hedgeLevels[level].entryPrice = entryPrice;
+        hedgeLevels[level].isLong = nextIsLong;
+        hedgeLevels[level].entryPrice = nextEntryPrice;
         hedgeLevels[level].stopLoss = sl;
         hedgeLevels[level].takeProfit = tp;
         hedgeLevels[level].volume = volume;
-        hedgeLevels[level].isActive = false;  // Will be set to true when activated
-        
-        UpdatePriceLabels(level);
+        hedgeLevels[level].isActive = false;
+        hedgeLevels[level].exitTime = 0;
+        hedgeLevels[level].positionTicket = 0;
+        hedgeLevels[level].statusChanged = false;
     }
 }
 
@@ -554,24 +551,38 @@ void CheckLevelExit(int level)
     if(level >= 5) return;
     if(hedgeLevels[level].exitTime > 0) return;
     
-    // Only log level status when there's a change or every 5 minutes
-    static datetime lastDebugTime = 0;
+    // Only log level 3 status when there's a change
+    static datetime lastL3DebugTime = 0;
     datetime currentTime = TimeCurrent();
     
-    if(currentTime - lastDebugTime >= 300 || hedgeLevels[level].statusChanged) // 300 seconds = 5 minutes
+    if(level == 2 && (currentTime - lastL3DebugTime >= 300 || hedgeLevels[level].statusChanged)) // Level 3 (index 2)
     {
-        string status = "Pending";
-        if(hedgeLevels[level].isActive) status = "Active";
-        if(hedgeLevels[level].exitTime > 0) status = "Exited";
-        
-        Print("Level ", level+1, " Status: ", status, 
-              " Ticket: ", hedgeLevels[level].ticket,
+        Print("Level 3 Status - ",
+              "Ticket: ", hedgeLevels[level].ticket,
+              " Active: ", hedgeLevels[level].isActive,
               " Entry: ", hedgeLevels[level].entryPrice,
-              " Current Bid: ", SymbolInfoDouble(_Symbol, SYMBOL_BID),
-              " Current Ask: ", SymbolInfoDouble(_Symbol, SYMBOL_ASK));
+              " Previous Level Active: ", hedgeLevels[level-1].isActive,
+              " Previous Level Ticket: ", hedgeLevels[level-1].ticket);
               
-        lastDebugTime = currentTime;
+        lastL3DebugTime = currentTime;
         hedgeLevels[level].statusChanged = false;
+    }
+    
+    // Check if this level just became active and needs to place next level's pending order
+    if(hedgeLevels[level].isActive && level < 4 && hedgeLevels[level + 1].ticket == 0) {
+        if(level == 2) { // Debug for Level 3
+            Print("Attempting to place Level ", level + 2, " order - Previous level active: ", hedgeLevels[level].isActive);
+            Print("Level ", level + 2, " Entry Price Calculation:",
+                  " Current Entry: ", hedgeLevels[level].entryPrice,
+                  " Channel: ", Channel,
+                  " PipValue: ", pipValue);
+        }
+        
+        double nextEntryPrice = hedgeLevels[level].isLong ?
+            hedgeLevels[level].entryPrice + MathAbs(Channel) * pipValue :  // Buy stop if long
+            hedgeLevels[level].entryPrice - MathAbs(Channel) * pipValue;   // Sell stop if short
+            
+        PlacePendingOrder(level + 1, hedgeLevels[level].isLong, nextEntryPrice);
     }
     
     double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
@@ -604,13 +615,13 @@ void CheckLevelExit(int level)
             Print("Level 2 Exit Complete - Exit Time: ", TimeToString(hedgeLevels[level].exitTime));
         }
         
-        // Only place next order if SL was hit and no TP has been hit
-        if(!hasHitTakeProfit && slHit && level < 4 && hedgeLevels[level + 1].ticket == 0) {
+        // Check if this level just became active and needs to place next level's pending order
+        if(hedgeLevels[level].isActive && level < 4 && hedgeLevels[level + 1].ticket == 0) {
             double nextEntryPrice = hedgeLevels[level].isLong ?
-                hedgeLevels[level].entryPrice - MathAbs(Channel) * pipValue :
-                hedgeLevels[level].entryPrice + MathAbs(Channel) * pipValue;
+                hedgeLevels[level].entryPrice + MathAbs(Channel) * pipValue :  // Buy stop if long
+                hedgeLevels[level].entryPrice - MathAbs(Channel) * pipValue;   // Sell stop if short
                 
-            PlacePendingOrder(level + 1, !hedgeLevels[level].isLong, nextEntryPrice);
+            PlacePendingOrder(level + 1, hedgeLevels[level].isLong, nextEntryPrice);  // Same direction as current level
         }
     }
 }
@@ -679,17 +690,89 @@ void OnTradeTransaction(const MqlTradeTransaction& trans,
                        const MqlTradeRequest& request,
                        const MqlTradeResult& result)
 {
-    // ... existing code ...
+    // Debug every transaction
+    Print("Transaction - Type: ", trans.type,
+          " Order: ", trans.order,
+          " Deal: ", trans.deal,
+          " Position: ", trans.position);
+    
+    // Check if position was opened
+    if(trans.type == TRADE_TRANSACTION_DEAL_ADD) {
+        ulong dealTicket = trans.deal;
+        if(dealTicket > 0) {
+            if(HistoryDealSelect(dealTicket)) {
+                ulong orderTicket = HistoryDealGetInteger(dealTicket, DEAL_ORDER);
+                ENUM_DEAL_ENTRY dealEntry = (ENUM_DEAL_ENTRY)HistoryDealGetInteger(dealTicket, DEAL_ENTRY);
+                long dealType = HistoryDealGetInteger(dealTicket, DEAL_TYPE);
+                double dealPrice = HistoryDealGetDouble(dealTicket, DEAL_PRICE);
+                
+                Print("Deal Details - Ticket: ", dealTicket,
+                      " Order: ", orderTicket,
+                      " Entry: ", dealEntry,
+                      " Type: ", dealType,
+                      " Price: ", dealPrice);
+                
+                // Find corresponding level
+                for(int i=0; i<5; i++) {
+                    if(hedgeLevels[i].ticket == orderTicket || hedgeLevels[i].positionTicket == trans.position) {
+                        Print("Found matching level: ", i+1,
+                              " Current Active: ", hedgeLevels[i].isActive,
+                              " Entry Price: ", hedgeLevels[i].entryPrice);
+                              
+                        // If position opened from pending order
+                        if(dealEntry == DEAL_ENTRY_IN) {
+                            hedgeLevels[i].isActive = true;
+                            hedgeLevels[i].statusChanged = true;
+                            hedgeLevels[i].positionTicket = trans.position;
+                            
+                            // Check if this is Level 5
+                            if(i == 4) {
+                                HandleExit("Maximum Level (5) Reached");
+                            }
+                            // Only place next level's order when current level becomes active
+                            else if(i < 4) {
+                                Print("Level ", i+1, " Activated - Setting up Level ", i+2);
+                                PlacePendingOrder(i+1, !hedgeLevels[i].isLong, hedgeLevels[i].entryPrice);
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+    }
     
     // When order status changes
     for(int i=0; i<5; i++) {
-        if(hedgeLevels[i].ticket == trans.order) {
-            if(trans.type == TRADE_TRANSACTION_ORDER_ADD || 
-               trans.type == TRADE_TRANSACTION_ORDER_DELETE ||
-               trans.type == TRADE_TRANSACTION_ORDER_STATE) {
+        if(hedgeLevels[i].ticket == trans.order || hedgeLevels[i].positionTicket == trans.position) {
+            if(trans.type <= 2) {
                 hedgeLevels[i].statusChanged = true;
+                
+                Print("Level ", i+1, " Status Change - ",
+                      "Type: ", trans.type,
+                      " Order: ", trans.order,
+                      " Position: ", trans.position,
+                      " Active: ", hedgeLevels[i].isActive);
             }
             break;
         }
     }
+}
+
+void HandleExit(string reason)
+{
+    // Set flags
+    maxLevelReached = true;
+    hasHitTakeProfit = true;
+    
+    // Delete any pending orders
+    for(int i=0; i<5; i++) {
+        if(hedgeLevels[i].ticket > 0 && !hedgeLevels[i].isActive) {
+            trade.OrderDelete(hedgeLevels[i].ticket);
+            Print("Deleting pending order for Level ", i+1, " (Ticket: ", hedgeLevels[i].ticket, ")");
+        }
+    }
+    
+    Print("Strategy Exit - Reason: ", reason, 
+          " - All pending orders deleted, no new orders will be placed");
 }
