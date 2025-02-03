@@ -34,6 +34,7 @@ int           symbolDigits;                 // Digits in price
 double        pipValue;                     // Value of one pip
 double          initialChartRange = 0;      // Store initial chart range
 double          initialOffsetSize = 0;      // Store initial offset size
+bool hasHitTakeProfit = false;  // Flag to track if any level has hit TP
 
 struct HedgeLevel {
     int ticket;         // Order ticket
@@ -45,6 +46,7 @@ struct HedgeLevel {
     bool isActive;     // Whether this level is active
     datetime exitTime; // Time when the level exited (0 if not exited)
     double exitPrice; // Price at which the level exited
+    bool statusChanged;  // New field to track status changes
 };
 
 HedgeLevel hedgeLevels[5];  // Array to store up to 5 hedge levels
@@ -68,6 +70,9 @@ color levelColors[5] = {
 //+------------------------------------------------------------------+
 int OnInit()
 {
+    // Reset the TP flag on initialization
+    hasHitTakeProfit = false;
+    
     trade.SetExpertMagicNumber(123456);
     trade.SetMarginMode();
     trade.SetTypeFillingBySymbol(_Symbol);
@@ -128,30 +133,34 @@ void UpdatePriceLabels(int level)
     string basePrefix = "Level_" + IntegerToString(level+1);
     string slLabelName = basePrefix + "_SL_Label";
     string tpLabelName = basePrefix + "_TP_Label";
+    string levelSuffix = " (L" + IntegerToString(level+1) + ")";
     
     // If level has exited, ensure label stays at exit point
     if(hedgeLevels[level].exitTime > 0) {
         if(level == 1) Print("Level 2 Label Update (Exited) - Exit Time: ", TimeToString(hedgeLevels[level].exitTime));
-        double slDollarValue = CalculateDollarValue(hedgeLevels[level].exitPrice, 
-                                                  hedgeLevels[level].entryPrice,
-                                                  hedgeLevels[level].isLong,
-                                                  hedgeLevels[level].volume);
+        double exitDollarValue = CalculateDollarValue(hedgeLevels[level].exitPrice, 
+                                                    hedgeLevels[level].entryPrice,
+                                                    hedgeLevels[level].isLong,
+                                                    hedgeLevels[level].volume);
                                                   
-        // Create or update SL label at exit point
-        if(ObjectFind(0, slLabelName) >= 0) {
-            ObjectSetInteger(0, slLabelName, OBJPROP_TIME, hedgeLevels[level].exitTime);
-            ObjectSetDouble(0, slLabelName, OBJPROP_PRICE, hedgeLevels[level].exitPrice);
-            ObjectSetString(0, slLabelName, OBJPROP_TEXT, StringFormat("$%.2f", slDollarValue));
+        // Create or update exit label at exit point
+        string labelName = basePrefix + (hedgeLevels[level].exitPrice == hedgeLevels[level].stopLoss ? "_SL_Label" : "_TP_Label");
+        color labelColor = hedgeLevels[level].exitPrice == hedgeLevels[level].stopLoss ? clrRed : clrGreen;
+        
+        if(ObjectFind(0, labelName) >= 0) {
+            ObjectSetInteger(0, labelName, OBJPROP_TIME, hedgeLevels[level].exitTime);
+            ObjectSetDouble(0, labelName, OBJPROP_PRICE, hedgeLevels[level].exitPrice);
+            ObjectSetString(0, labelName, OBJPROP_TEXT, StringFormat("$%.2f%s", exitDollarValue, levelSuffix));
         } else {
-            ObjectCreate(0, slLabelName, OBJ_TEXT, 0, hedgeLevels[level].exitTime, hedgeLevels[level].exitPrice);
-            ObjectSetString(0, slLabelName, OBJPROP_TEXT, StringFormat("$%.2f", slDollarValue));
-            ObjectSetInteger(0, slLabelName, OBJPROP_COLOR, clrRed);
-            ObjectSetInteger(0, slLabelName, OBJPROP_ANCHOR, ANCHOR_LEFT);
-            ObjectSetInteger(0, slLabelName, OBJPROP_FONTSIZE, 8);
+            ObjectCreate(0, labelName, OBJ_TEXT, 0, hedgeLevels[level].exitTime, hedgeLevels[level].exitPrice);
+            ObjectSetString(0, labelName, OBJPROP_TEXT, StringFormat("$%.2f%s", exitDollarValue, levelSuffix));
+            ObjectSetInteger(0, labelName, OBJPROP_COLOR, labelColor);
+            ObjectSetInteger(0, labelName, OBJPROP_ANCHOR, ANCHOR_LEFT);
+            ObjectSetInteger(0, labelName, OBJPROP_FONTSIZE, 8);
         }
         
-        // Ensure TP label is removed
-        ObjectDelete(0, tpLabelName);
+        // Delete the other label
+        ObjectDelete(0, basePrefix + (hedgeLevels[level].exitPrice == hedgeLevels[level].stopLoss ? "_TP_Label" : "_SL_Label"));
         return;
     }
     
@@ -179,10 +188,10 @@ void UpdatePriceLabels(int level)
     if(ObjectFind(0, slLabelName) >= 0) {
         ObjectSetInteger(0, slLabelName, OBJPROP_TIME, labelTime);
         ObjectSetDouble(0, slLabelName, OBJPROP_PRICE, hedgeLevels[level].stopLoss);
-        ObjectSetString(0, slLabelName, OBJPROP_TEXT, StringFormat("$%.2f", slDollarValue));
+        ObjectSetString(0, slLabelName, OBJPROP_TEXT, StringFormat("$%.2f%s", slDollarValue, levelSuffix));
     } else {
         ObjectCreate(0, slLabelName, OBJ_TEXT, 0, labelTime, hedgeLevels[level].stopLoss);
-        ObjectSetString(0, slLabelName, OBJPROP_TEXT, StringFormat("$%.2f", slDollarValue));
+        ObjectSetString(0, slLabelName, OBJPROP_TEXT, StringFormat("$%.2f%s", slDollarValue, levelSuffix));
         ObjectSetInteger(0, slLabelName, OBJPROP_COLOR, clrRed);
         ObjectSetInteger(0, slLabelName, OBJPROP_ANCHOR, ANCHOR_LEFT);
         ObjectSetInteger(0, slLabelName, OBJPROP_FONTSIZE, 8);
@@ -191,10 +200,10 @@ void UpdatePriceLabels(int level)
     if(ObjectFind(0, tpLabelName) >= 0) {
         ObjectSetInteger(0, tpLabelName, OBJPROP_TIME, labelTime);
         ObjectSetDouble(0, tpLabelName, OBJPROP_PRICE, hedgeLevels[level].takeProfit);
-        ObjectSetString(0, tpLabelName, OBJPROP_TEXT, StringFormat("$%.2f", tpDollarValue));
+        ObjectSetString(0, tpLabelName, OBJPROP_TEXT, StringFormat("$%.2f%s", tpDollarValue, levelSuffix));
     } else {
         ObjectCreate(0, tpLabelName, OBJ_TEXT, 0, labelTime, hedgeLevels[level].takeProfit);
-        ObjectSetString(0, tpLabelName, OBJPROP_TEXT, StringFormat("$%.2f", tpDollarValue));
+        ObjectSetString(0, tpLabelName, OBJPROP_TEXT, StringFormat("$%.2f%s", tpDollarValue, levelSuffix));
         ObjectSetInteger(0, tpLabelName, OBJPROP_COLOR, clrGreen);
         ObjectSetInteger(0, tpLabelName, OBJPROP_ANCHOR, ANCHOR_LEFT);
         ObjectSetInteger(0, tpLabelName, OBJPROP_FONTSIZE, 8);
@@ -282,7 +291,7 @@ void OnTick()
             // Check if pending order was activated
             if(!hedgeLevels[i].isActive && OrderSelect(hedgeLevels[i].ticket)) {
                 hedgeLevels[i].isActive = true;
-                if(i == 1) Print("Level 2 Activated - Time: ", TimeToString(TimeCurrent()));
+                if(i == 1) Print("Level 2 Order Activated");
             }
         }
         
@@ -353,61 +362,66 @@ void ProcessTradingLogic()
 
 void UpdateVisualization()
 {
-   if(TimeCurrent() - lastVisualizationUpdate < VISUALIZATION_UPDATE_INTERVAL) {
-      return;
-   }
-   
-   lastVisualizationUpdate = TimeCurrent();
-   
-   // Only delete our specific custom objects
-   for(int i=0; i<5; i++) {
-       string prefix = "Level_" + IntegerToString(i+1);
-       ObjectDelete(0, prefix + "_Entry");
-       ObjectDelete(0, prefix + "_SL");
-       ObjectDelete(0, prefix + "_TP");
-   }
-   
-   ObjectDelete(0, "Channel_Upper");
-   ObjectDelete(0, "Channel_Lower");
-   
-   // Draw channel borders based on initial entry
-   double baseEntry = hedgeLevels[0].entryPrice;
-   double channelEntry = baseEntry - MathAbs(Channel) * pipValue;
-   
-   // Draw channel lines
-   DrawLine("Channel_Upper", baseEntry, clrGray);
-   DrawLine("Channel_Lower", channelEntry, clrGray);
-   
-   // Draw active levels and pending orders
-   for(int i=0; i<5; i++) {
-       if(hedgeLevels[i].isActive || (i > 0 && hedgeLevels[i-1].isActive)) {
-           string prefix = "Level_" + IntegerToString(i+1);
-           color levelColor = levelColors[i];
-           
-           // Entry will be either at baseEntry or channel entry
-           double entryPrice = (i % 2 == 1) ? channelEntry : baseEntry;
-           
-           // Draw entry line
-           ObjectCreate(0, prefix + "_Entry", OBJ_HLINE, 0, 0, entryPrice);
-           ObjectSetInteger(0, prefix + "_Entry", OBJPROP_COLOR, levelColor);
-           ObjectSetInteger(0, prefix + "_Entry", OBJPROP_STYLE, STYLE_SOLID);
-           ObjectSetInteger(0, prefix + "_Entry", OBJPROP_WIDTH, 2);
-           
-           // Draw SL line
-           ObjectCreate(0, prefix + "_SL", OBJ_HLINE, 0, 0, hedgeLevels[i].stopLoss);
-           ObjectSetInteger(0, prefix + "_SL", OBJPROP_COLOR, levelColor);
-           ObjectSetInteger(0, prefix + "_SL", OBJPROP_STYLE, STYLE_DOT);
-           ObjectSetInteger(0, prefix + "_SL", OBJPROP_WIDTH, 1);
-           
-           // Draw TP line
-           ObjectCreate(0, prefix + "_TP", OBJ_HLINE, 0, 0, hedgeLevels[i].takeProfit);
-           ObjectSetInteger(0, prefix + "_TP", OBJPROP_COLOR, levelColor);
-           ObjectSetInteger(0, prefix + "_TP", OBJPROP_STYLE, STYLE_DASH);
-           ObjectSetInteger(0, prefix + "_SL", OBJPROP_WIDTH, 1);
-       }
-   }
-   
-   ChartRedraw(0);
+    if(TimeCurrent() - lastVisualizationUpdate < VISUALIZATION_UPDATE_INTERVAL) {
+        return;
+    }
+    
+    lastVisualizationUpdate = TimeCurrent();
+    
+    // Calculate base prices
+    double baseEntry = hedgeLevels[0].entryPrice;
+    double channelEntry = baseEntry - MathAbs(Channel) * pipValue;
+    
+    // Draw channel borders
+    DrawLine("Channel_Upper", baseEntry, clrGray, STYLE_SOLID, 1);
+    DrawLine("Channel_Lower", channelEntry, clrGray, STYLE_SOLID, 1);
+    
+    // Debug Level 2 state
+    if(hedgeLevels[1].ticket > 0 || hedgeLevels[1].isActive) {
+        Print("Level 2 Debug - Ticket: ", hedgeLevels[1].ticket,
+              " Active: ", hedgeLevels[1].isActive,
+              " Entry: ", hedgeLevels[1].entryPrice,
+              " ExitTime: ", hedgeLevels[1].exitTime);
+    }
+    
+    // Draw levels
+    for(int i=0; i<5; i++) {
+        string prefix = "Level_" + IntegerToString(i+1);
+        color levelColor = levelColors[i];
+        
+        // Draw if level has a ticket or is active and hasn't exited
+        if((hedgeLevels[i].ticket > 0 || hedgeLevels[i].isActive) && hedgeLevels[i].exitTime == 0) {
+            if(i == 1) Print("Drawing Level 2 - Entry Price: ", hedgeLevels[i].entryPrice);
+            
+            // Draw entry line
+            DrawLine(prefix + "_Entry", hedgeLevels[i].entryPrice, levelColor, STYLE_SOLID, 2);
+            
+            // Draw SL/TP lines
+            DrawLine(prefix + "_SL", hedgeLevels[i].stopLoss, levelColor, STYLE_DOT, 1);
+            DrawLine(prefix + "_TP", hedgeLevels[i].takeProfit, levelColor, STYLE_DASH, 1);
+        }
+        else {
+            if(i == 1) Print("Deleting Level 2 Lines");
+            ObjectDelete(0, prefix + "_Entry");
+            ObjectDelete(0, prefix + "_SL");
+            ObjectDelete(0, prefix + "_TP");
+        }
+    }
+    
+    ChartRedraw(0);
+}
+
+//+------------------------------------------------------------------+
+//| Helper function to draw lines                                      |
+//+------------------------------------------------------------------+
+void DrawLine(string name, double price, color clr, ENUM_LINE_STYLE style = STYLE_SOLID, int width = 1)
+{
+    if(!ObjectCreate(0, name, OBJ_HLINE, 0, 0, price)) {
+        ObjectMove(0, name, 0, 0, price);
+    }
+    ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
+    ObjectSetInteger(0, name, OBJPROP_STYLE, style);
+    ObjectSetInteger(0, name, OBJPROP_WIDTH, width);
 }
 
 //+------------------------------------------------------------------+
@@ -473,6 +487,11 @@ void OpenInitialTrade()
 //+------------------------------------------------------------------+
 void PlacePendingOrder(int level, bool isLong, double baseEntryPrice)
 {
+    // Don't place new orders if TP has been hit
+    if(hasHitTakeProfit) {
+        return;
+    }
+    
     if(level >= 5) return;
     
     double channelEntry = baseEntryPrice - MathAbs(Channel) * pipValue;
@@ -498,6 +517,9 @@ void PlacePendingOrder(int level, bool isLong, double baseEntryPrice)
     
     ENUM_ORDER_TYPE orderType = isLong ? ORDER_TYPE_BUY_STOP : ORDER_TYPE_SELL_STOP;
     
+    if(level == 1) Print("Placing Level 2 Order - Type: ", (isLong ? "Buy Stop" : "Sell Stop"), 
+                         " Entry: ", entryPrice);
+    
     int ticket = trade.OrderOpen(_Symbol,
                                orderType,
                                volume,
@@ -510,13 +532,15 @@ void PlacePendingOrder(int level, bool isLong, double baseEntryPrice)
                                "Hedge Level " + IntegerToString(level + 1));
                                
     if(ticket > 0) {
+        if(level == 1) Print("Level 2 Order Placed - Ticket: ", ticket);
+        
         hedgeLevels[level].ticket = ticket;
         hedgeLevels[level].isLong = isLong;
         hedgeLevels[level].entryPrice = entryPrice;
         hedgeLevels[level].stopLoss = sl;
         hedgeLevels[level].takeProfit = tp;
         hedgeLevels[level].volume = volume;
-        hedgeLevels[level].isActive = false;
+        hedgeLevels[level].isActive = false;  // Will be set to true when activated
         
         UpdatePriceLabels(level);
     }
@@ -530,58 +554,65 @@ void CheckLevelExit(int level)
     if(level >= 5) return;
     if(hedgeLevels[level].exitTime > 0) return;
     
+    // Only log level status when there's a change or every 5 minutes
+    static datetime lastDebugTime = 0;
+    datetime currentTime = TimeCurrent();
+    
+    if(currentTime - lastDebugTime >= 300 || hedgeLevels[level].statusChanged) // 300 seconds = 5 minutes
+    {
+        string status = "Pending";
+        if(hedgeLevels[level].isActive) status = "Active";
+        if(hedgeLevels[level].exitTime > 0) status = "Exited";
+        
+        Print("Level ", level+1, " Status: ", status, 
+              " Ticket: ", hedgeLevels[level].ticket,
+              " Entry: ", hedgeLevels[level].entryPrice,
+              " Current Bid: ", SymbolInfoDouble(_Symbol, SYMBOL_BID),
+              " Current Ask: ", SymbolInfoDouble(_Symbol, SYMBOL_ASK));
+              
+        lastDebugTime = currentTime;
+        hedgeLevels[level].statusChanged = false;
+    }
+    
     double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
     double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
     
-    // Check if SL hit
+    // Check if SL or TP hit
     bool slHit = (hedgeLevels[level].isLong && bid <= hedgeLevels[level].stopLoss) ||
                  (!hedgeLevels[level].isLong && ask >= hedgeLevels[level].stopLoss);
                  
-    if(level == 1 && slHit) { // Log Level 2 SL check
-        Print("Level 2 SL Check - Current ", (hedgeLevels[level].isLong ? "Bid: " : "Ask: "),
-              (hedgeLevels[level].isLong ? bid : ask),
-              " SL: ", hedgeLevels[level].stopLoss);
-    }
+    bool tpHit = (hedgeLevels[level].isLong && bid >= hedgeLevels[level].takeProfit) ||
+                 (!hedgeLevels[level].isLong && ask <= hedgeLevels[level].takeProfit);
     
-    if(slHit) {
+    if(slHit || tpHit) {
         if(level == 1) {
-            Print("Level 2 SL Hit - Time: ", TimeToString(TimeCurrent()),
-                  " Price: ", hedgeLevels[level].stopLoss);
+            Print("Level 2 Exit - SL/TP Hit - Active: ", hedgeLevels[level].isActive,
+                  " Ticket: ", hedgeLevels[level].ticket);
         }
         
         hedgeLevels[level].exitTime = TimeCurrent();
-        hedgeLevels[level].exitPrice = hedgeLevels[level].stopLoss;
+        hedgeLevels[level].exitPrice = slHit ? hedgeLevels[level].stopLoss : hedgeLevels[level].takeProfit;
+        
+        // If TP hit, set flag to prevent new orders
+        if(tpHit) {
+            hasHitTakeProfit = true;
+        }
         
         UpdatePriceLabels(level);
-        CleanupLevelVisualization(level);
-        
-        hedgeLevels[level].isActive = false;
-        hedgeLevels[level].ticket = 0;
         
         if(level == 1) {
-            Print("Level 2 Exit Complete - Exit Time: ", TimeToString(hedgeLevels[level].exitTime),
-                  " Exit Price: ", hedgeLevels[level].exitPrice);
+            Print("Level 2 Exit Complete - Exit Time: ", TimeToString(hedgeLevels[level].exitTime));
+        }
+        
+        // Only place next order if SL was hit and no TP has been hit
+        if(!hasHitTakeProfit && slHit && level < 4 && hedgeLevels[level + 1].ticket == 0) {
+            double nextEntryPrice = hedgeLevels[level].isLong ?
+                hedgeLevels[level].entryPrice - MathAbs(Channel) * pipValue :
+                hedgeLevels[level].entryPrice + MathAbs(Channel) * pipValue;
+                
+            PlacePendingOrder(level + 1, !hedgeLevels[level].isLong, nextEntryPrice);
         }
     }
-}
-
-//+------------------------------------------------------------------+
-//| Clean up visualization objects for a specific level                |
-//+------------------------------------------------------------------+
-void CleanupLevelVisualization(int level)
-{
-    string basePrefix = "Level_" + IntegerToString(level+1);
-    
-    // Only delete lines and TP label, preserve SL label if level has exited
-    if(hedgeLevels[level].exitTime == 0) {
-        ObjectDelete(0, basePrefix + "_SL_Label");
-    }
-    ObjectDelete(0, basePrefix + "_TP_Label");
-    ObjectDelete(0, basePrefix + "_Entry");
-    ObjectDelete(0, basePrefix + "_SL");
-    ObjectDelete(0, basePrefix + "_TP");
-    
-    ChartRedraw(0);
 }
 
 //+------------------------------------------------------------------+
@@ -602,7 +633,10 @@ void CloseAllPositions()
     }
     
     for(int i=0; i<5; i++) {
-        CleanupLevelVisualization(i);
+        string prefix = "Level_" + IntegerToString(i+1);
+        ObjectDelete(0, prefix + "_Entry");
+        ObjectDelete(0, prefix + "_SL");
+        ObjectDelete(0, prefix + "_TP");
         hedgeLevels[i].isActive = false;
         hedgeLevels[i].ticket = 0;
     }
@@ -617,13 +651,45 @@ void CloseAllPositions()
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
 {
-    Print("DEBUG - OnDeinit called with reason: ", reason);  // Debug print
+    Print("DEBUG - OnDeinit called with reason: ", reason);
     
     // Clean up all visualization objects
     for(int i=0; i<5; i++) {
-        CleanupLevelVisualization(i);
+        string prefix = "Level_" + IntegerToString(i+1);
+        ObjectDelete(0, prefix + "_Entry");
+        ObjectDelete(0, prefix + "_SL");
+        ObjectDelete(0, prefix + "_TP");
     }
     
-    Comment("");  // Clear any comments
+    Comment("");
     ChartRedraw(0);
+}
+
+// Update the InitLevel function to initialize the new field
+void InitLevel(int level) {
+    hedgeLevels[level].ticket = 0;
+    hedgeLevels[level].isActive = false;
+    hedgeLevels[level].entryPrice = 0.0;
+    hedgeLevels[level].exitTime = 0;
+    hedgeLevels[level].statusChanged = false;  // Initialize new field
+}
+
+// Update where order status changes occur to set statusChanged flag
+void OnTradeTransaction(const MqlTradeTransaction& trans,
+                       const MqlTradeRequest& request,
+                       const MqlTradeResult& result)
+{
+    // ... existing code ...
+    
+    // When order status changes
+    for(int i=0; i<5; i++) {
+        if(hedgeLevels[i].ticket == trans.order) {
+            if(trans.type == TRADE_TRANSACTION_ORDER_ADD || 
+               trans.type == TRADE_TRANSACTION_ORDER_DELETE ||
+               trans.type == TRADE_TRANSACTION_ORDER_STATE) {
+                hedgeLevels[i].statusChanged = true;
+            }
+            break;
+        }
+    }
 }
