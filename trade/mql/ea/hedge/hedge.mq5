@@ -593,27 +593,35 @@ bool CheckLevelExit(int level)
             }
             
             if(isHighestLevel) {
-                // Delete all pending orders and their visualization for higher levels
+                // Delete pending orders and their visualization ONLY if never activated
                 for(int k=level+1; k<5; k++) {
-                    if(hedgeLevels[k].ticket > 0 && !hedgeLevels[k].isActive) {
+                    if(hedgeLevels[k].ticket > 0 && !hedgeLevels[k].isActive && !hedgeLevels[k].exitTime) {
                         trade.OrderDelete(hedgeLevels[k].ticket);
                         Print("Deleting pending order for Level ", k+1, " (Ticket: ", hedgeLevels[k].ticket, ")");
                         hedgeLevels[k].ticket = 0;  // Clear the ticket
                         
-                        // Delete visualization objects
+                        // Delete ALL visualization objects for never-active orders
                         string prefix = "Level_" + IntegerToString(k+1);
                         ObjectDelete(0, prefix + "_Entry");
                         ObjectDelete(0, prefix + "_SL");
                         ObjectDelete(0, prefix + "_TP");
                         ObjectDelete(0, prefix + "_SL_Label");
                         ObjectDelete(0, prefix + "_TP_Label");
+                        
+                        // Also clear any label-specific data
+                        hedgeLevels[k].exitTime = 0;
+                        hedgeLevels[k].exitPrice = 0;
+                        hedgeLevels[k].statusChanged = false;
                     }
                 }
                 hasHitTakeProfit = true;
             }
         }
         
-        UpdatePriceLabels(level);
+        // Only update price labels for active orders
+        if(hedgeLevels[level].isActive) {
+            UpdatePriceLabels(level);
+        }
         return tpHit;
     }
     
@@ -768,6 +776,44 @@ void HandleExit(string reason)
 
 void OnTrade()
 {
+    // First check for cancelled pending orders or manually closed active positions
+    for(int i=0; i<5; i++) {
+        if(hedgeLevels[i].ticket > 0) {
+            bool orderExists = false;
+            
+            // Check if pending order still exists
+            if(!hedgeLevels[i].isActive) {
+                orderExists = OrderSelect(hedgeLevels[i].ticket);
+            }
+            // Check if active position still exists
+            else {
+                orderExists = PositionSelectByTicket(hedgeLevels[i].ticket);
+            }
+            
+            // If order/position no longer exists
+            if(!orderExists) {
+                if(!hedgeLevels[i].isActive) {
+                    // Clean up cancelled pending order
+                    Print("Pending order cancelled for Level ", i+1);
+                    string prefix = "Level_" + IntegerToString(i+1);
+                    ObjectDelete(0, prefix + "_Entry");
+                    ObjectDelete(0, prefix + "_SL");
+                    ObjectDelete(0, prefix + "_TP");
+                    ObjectDelete(0, prefix + "_SL_Label");
+                    ObjectDelete(0, prefix + "_TP_Label");
+                    hedgeLevels[i].ticket = 0;
+                }
+                else {
+                    // Handle closed active position
+                    Print("Active position closed for Level ", i+1);
+                    hedgeLevels[i].exitTime = TimeCurrent();
+                    hedgeLevels[i].exitPrice = PositionGetDouble(POSITION_PRICE_CURRENT);
+                    UpdatePriceLabels(i);  // This will show final P/L
+                }
+            }
+        }
+    }
+
     // First check if any active level hit TP
     for(int i=0; i<5; i++) {
         if(hedgeLevels[i].isActive && !hedgeLevels[i].exitTime) {
