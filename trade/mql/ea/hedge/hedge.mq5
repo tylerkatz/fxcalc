@@ -68,17 +68,13 @@ color levelColors[5] = {
 //+------------------------------------------------------------------+
 int OnInit()
 {
-    // Initialize trading object
     trade.SetExpertMagicNumber(123456);
     trade.SetMarginMode();
     trade.SetTypeFillingBySymbol(_Symbol);
     
-    // Get symbol properties
     symbolDigits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
     point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
     pipValue = (symbolDigits == 3 || symbolDigits == 5) ? point * 10 : point;
-    
-    Print("Symbol Digits: ", symbolDigits, " Point: ", point, " Pip Value: ", pipValue);
     
     return(INIT_SUCCEEDED);
 }
@@ -133,16 +129,18 @@ void UpdatePriceLabels(int level)
     string slLabelName = basePrefix + "_SL_Label";
     string tpLabelName = basePrefix + "_TP_Label";
     
-    // If level has exited, use stored exit values
+    // If level has exited, ensure label stays at exit point
     if(hedgeLevels[level].exitTime > 0) {
+        if(level == 1) Print("Level 2 Label Update (Exited) - Exit Time: ", TimeToString(hedgeLevels[level].exitTime));
         double slDollarValue = CalculateDollarValue(hedgeLevels[level].exitPrice, 
                                                   hedgeLevels[level].entryPrice,
                                                   hedgeLevels[level].isLong,
                                                   hedgeLevels[level].volume);
                                                   
-        // Update or create SL label at exit point
+        // Create or update SL label at exit point
         if(ObjectFind(0, slLabelName) >= 0) {
             ObjectSetInteger(0, slLabelName, OBJPROP_TIME, hedgeLevels[level].exitTime);
+            ObjectSetDouble(0, slLabelName, OBJPROP_PRICE, hedgeLevels[level].exitPrice);
             ObjectSetString(0, slLabelName, OBJPROP_TEXT, StringFormat("$%.2f", slDollarValue));
         } else {
             ObjectCreate(0, slLabelName, OBJ_TEXT, 0, hedgeLevels[level].exitTime, hedgeLevels[level].exitPrice);
@@ -152,7 +150,7 @@ void UpdatePriceLabels(int level)
             ObjectSetInteger(0, slLabelName, OBJPROP_FONTSIZE, 8);
         }
         
-        // Remove TP label for exited level
+        // Ensure TP label is removed
         ObjectDelete(0, tpLabelName);
         return;
     }
@@ -168,12 +166,19 @@ void UpdatePriceLabels(int level)
                                               hedgeLevels[level].isLong,
                                               hedgeLevels[level].volume);
     
+    // Calculate label time position (2 candles into the future)
     datetime currentTime = TimeCurrent();
-    datetime labelTime = currentTime + (PeriodSeconds() * 2);
+    datetime labelTime = currentTime + (PeriodSeconds(PERIOD_CURRENT) * 2);
+    
+    if(level == 1 && hedgeLevels[level].isActive) {
+        Print("Level 2 Label Position - Current: ", TimeToString(currentTime),
+              " Label: ", TimeToString(labelTime));
+    }
     
     // Update active level labels
     if(ObjectFind(0, slLabelName) >= 0) {
         ObjectSetInteger(0, slLabelName, OBJPROP_TIME, labelTime);
+        ObjectSetDouble(0, slLabelName, OBJPROP_PRICE, hedgeLevels[level].stopLoss);
         ObjectSetString(0, slLabelName, OBJPROP_TEXT, StringFormat("$%.2f", slDollarValue));
     } else {
         ObjectCreate(0, slLabelName, OBJ_TEXT, 0, labelTime, hedgeLevels[level].stopLoss);
@@ -185,6 +190,7 @@ void UpdatePriceLabels(int level)
     
     if(ObjectFind(0, tpLabelName) >= 0) {
         ObjectSetInteger(0, tpLabelName, OBJPROP_TIME, labelTime);
+        ObjectSetDouble(0, tpLabelName, OBJPROP_PRICE, hedgeLevels[level].takeProfit);
         ObjectSetString(0, tpLabelName, OBJPROP_TEXT, StringFormat("$%.2f", tpDollarValue));
     } else {
         ObjectCreate(0, tpLabelName, OBJ_TEXT, 0, labelTime, hedgeLevels[level].takeProfit);
@@ -265,37 +271,24 @@ void OnChartEvent(const int id, const long& lparam, const double& dparam, const 
 //+------------------------------------------------------------------+
 void OnTick()
 {
-    // Place initial trade if not already done
     if(!isInitialTradeOpen) {
         OpenInitialTrade();
         return;
     }
     
-    // Update all active level labels
-    for(int i=0; i<5; i++) {
-        UpdatePriceLabels(i);
-    }
-    
-    // Check for level activation
+    // Check for level activation and exits
     for(int i=0; i<5; i++) {
         if(hedgeLevels[i].ticket > 0) {
             // Check if pending order was activated
             if(!hedgeLevels[i].isActive && OrderSelect(hedgeLevels[i].ticket)) {
                 hedgeLevels[i].isActive = true;
-                
-                // Place next level order when this one activates (if not already placed)
-                if(i < 4 && hedgeLevels[i + 1].ticket == 0) {
-                    double nextEntryPrice = hedgeLevels[i].isLong ?
-                        hedgeLevels[i].entryPrice - MathAbs(Channel) * pipValue :
-                        hedgeLevels[i].entryPrice + MathAbs(Channel) * pipValue;
-                        
-                    PlacePendingOrder(i + 1, !hedgeLevels[i].isLong, nextEntryPrice);
-                }
+                if(i == 1) Print("Level 2 Activated - Time: ", TimeToString(TimeCurrent()));
             }
         }
         
-        if(hedgeLevels[i].isActive) {
+        if(hedgeLevels[i].ticket > 0 || hedgeLevels[i].isActive) {
             CheckLevelExit(i);
+            UpdatePriceLabels(i);
         }
     }
     
@@ -381,7 +374,7 @@ void UpdateVisualization()
    double baseEntry = hedgeLevels[0].entryPrice;
    double channelEntry = baseEntry - MathAbs(Channel) * pipValue;
    
-   // Draw channel lines with neutral colors
+   // Draw channel lines
    DrawLine("Channel_Upper", baseEntry, clrGray);
    DrawLine("Channel_Lower", channelEntry, clrGray);
    
@@ -391,8 +384,6 @@ void UpdateVisualization()
            string prefix = "Level_" + IntegerToString(i+1);
            color levelColor = levelColors[i];
            
-           Print("Drawing Level ", i+1, " with color: ", ColorToString(levelColor));
-           
            // Entry will be either at baseEntry or channel entry
            double entryPrice = (i % 2 == 1) ? channelEntry : baseEntry;
            
@@ -400,7 +391,7 @@ void UpdateVisualization()
            ObjectCreate(0, prefix + "_Entry", OBJ_HLINE, 0, 0, entryPrice);
            ObjectSetInteger(0, prefix + "_Entry", OBJPROP_COLOR, levelColor);
            ObjectSetInteger(0, prefix + "_Entry", OBJPROP_STYLE, STYLE_SOLID);
-           ObjectSetInteger(0, prefix + "_Entry", OBJPROP_WIDTH, 2);  // Make lines thicker
+           ObjectSetInteger(0, prefix + "_Entry", OBJPROP_WIDTH, 2);
            
            // Draw SL line
            ObjectCreate(0, prefix + "_SL", OBJ_HLINE, 0, 0, hedgeLevels[i].stopLoss);
@@ -482,22 +473,9 @@ void OpenInitialTrade()
 //+------------------------------------------------------------------+
 void PlacePendingOrder(int level, bool isLong, double baseEntryPrice)
 {
-    Print("Starting PlacePendingOrder: Level=", level+1, 
-          ", Direction=", isLong ? "Long" : "Short",
-          ", BaseEntry=", baseEntryPrice);
-          
-    if(level >= 5) {
-        Print("Level too high, not placing order");
-        return;
-    }
+    if(level >= 5) return;
     
-    // Only two possible entry prices:
-    // 1. Base Entry (original entry price)
-    // 2. Channel Entry (base entry - channel)
     double channelEntry = baseEntryPrice - MathAbs(Channel) * pipValue;
-    
-    // Odd levels (2,4) use channel entry
-    // Even levels (1,3,5) use base entry
     double entryPrice = (level % 2 == 1) ? channelEntry : baseEntryPrice;
     
     double volume = level == 1 ? Level2Volume :
@@ -520,51 +498,70 @@ void PlacePendingOrder(int level, bool isLong, double baseEntryPrice)
     
     ENUM_ORDER_TYPE orderType = isLong ? ORDER_TYPE_BUY_STOP : ORDER_TYPE_SELL_STOP;
     
-    Print("Placing pending order: ", 
-          "Type=", EnumToString(orderType),
-          ", Volume=", volume,
-          ", Entry=", entryPrice,
-          ", SL=", sl,
-          ", TP=", tp);
-    
-    // Let's add more detailed logging for the order parameters
-    Print("Order details:",
-          "\nSymbol: ", _Symbol,
-          "\nType: ", EnumToString(orderType),
-          "\nVolume: ", volume,
-          "\nPrice: ", entryPrice,
-          "\nStopLoss: ", sl,
-          "\nTakeProfit: ", tp,
-          "\nComment: Hedge Level ", level + 1);
-    
-    int ticket = trade.OrderOpen(_Symbol,    // symbol
-                               orderType,    // order type
-                               volume,       // volume
-                               entryPrice,   // limit/stop price
-                               entryPrice,   // activation price
-                               sl,          // stop loss
-                               tp,          // take profit
-                               ORDER_TIME_GTC,  // time type
-                               0,           // expiration
+    int ticket = trade.OrderOpen(_Symbol,
+                               orderType,
+                               volume,
+                               entryPrice,
+                               entryPrice,
+                               sl,
+                               tp,
+                               ORDER_TIME_GTC,
+                               0,
                                "Hedge Level " + IntegerToString(level + 1));
                                
     if(ticket > 0) {
-        Print("Successfully placed pending order ticket #", ticket);
-        
         hedgeLevels[level].ticket = ticket;
         hedgeLevels[level].isLong = isLong;
         hedgeLevels[level].entryPrice = entryPrice;
         hedgeLevels[level].stopLoss = sl;
         hedgeLevels[level].takeProfit = tp;
         hedgeLevels[level].volume = volume;
-        hedgeLevels[level].isActive = false;  // Will become active when triggered
+        hedgeLevels[level].isActive = false;
         
-        // Create labels for pending order
         UpdatePriceLabels(level);
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Check level exit and cleanup                                       |
+//+------------------------------------------------------------------+
+void CheckLevelExit(int level)
+{
+    if(level >= 5) return;
+    if(hedgeLevels[level].exitTime > 0) return;
+    
+    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+    double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+    
+    // Check if SL hit
+    bool slHit = (hedgeLevels[level].isLong && bid <= hedgeLevels[level].stopLoss) ||
+                 (!hedgeLevels[level].isLong && ask >= hedgeLevels[level].stopLoss);
+                 
+    if(level == 1 && slHit) { // Log Level 2 SL check
+        Print("Level 2 SL Check - Current ", (hedgeLevels[level].isLong ? "Bid: " : "Ask: "),
+              (hedgeLevels[level].isLong ? bid : ask),
+              " SL: ", hedgeLevels[level].stopLoss);
+    }
+    
+    if(slHit) {
+        if(level == 1) {
+            Print("Level 2 SL Hit - Time: ", TimeToString(TimeCurrent()),
+                  " Price: ", hedgeLevels[level].stopLoss);
+        }
         
-        Print("Level ", level+1, " details stored and labels created");
-    } else {
-        Print("Failed to place pending order. Error: ", GetLastError());
+        hedgeLevels[level].exitTime = TimeCurrent();
+        hedgeLevels[level].exitPrice = hedgeLevels[level].stopLoss;
+        
+        UpdatePriceLabels(level);
+        CleanupLevelVisualization(level);
+        
+        hedgeLevels[level].isActive = false;
+        hedgeLevels[level].ticket = 0;
+        
+        if(level == 1) {
+            Print("Level 2 Exit Complete - Exit Time: ", TimeToString(hedgeLevels[level].exitTime),
+                  " Exit Price: ", hedgeLevels[level].exitPrice);
+        }
     }
 }
 
@@ -573,23 +570,16 @@ void PlacePendingOrder(int level, bool isLong, double baseEntryPrice)
 //+------------------------------------------------------------------+
 void CleanupLevelVisualization(int level)
 {
-    Print("DEBUG - Cleaning up visualization for level ", level);  // Debug print
-    
     string basePrefix = "Level_" + IntegerToString(level+1);
     
-    // Store object names for verification
-    string entryName = basePrefix + "_Entry";
-    string slName = basePrefix + "_SL";
-    string tpName = basePrefix + "_TP";
-    string slLabelName = basePrefix + "_SL_Label";
-    string tpLabelName = basePrefix + "_TP_Label";
-    
-    // Delete objects and verify
-    if(ObjectDelete(0, entryName)) Print("Deleted entry line");
-    if(ObjectDelete(0, slName)) Print("Deleted SL line");
-    if(ObjectDelete(0, tpName)) Print("Deleted TP line");
-    if(ObjectDelete(0, slLabelName)) Print("Deleted SL label");
-    if(ObjectDelete(0, tpLabelName)) Print("Deleted TP label");
+    // Only delete lines and TP label, preserve SL label if level has exited
+    if(hedgeLevels[level].exitTime == 0) {
+        ObjectDelete(0, basePrefix + "_SL_Label");
+    }
+    ObjectDelete(0, basePrefix + "_TP_Label");
+    ObjectDelete(0, basePrefix + "_Entry");
+    ObjectDelete(0, basePrefix + "_SL");
+    ObjectDelete(0, basePrefix + "_TP");
     
     ChartRedraw(0);
 }
@@ -599,80 +589,27 @@ void CleanupLevelVisualization(int level)
 //+------------------------------------------------------------------+
 void CloseAllPositions()
 {
-    Print("DEBUG - CloseAllPositions called");  // Debug print
-    
-    // Close all positions
     for(int i=PositionsTotal()-1; i>=0; i--) {
         if(PositionSelectByTicket(PositionGetTicket(i))) {
-            Print("Closing position ticket #", PositionGetTicket(i));
             trade.PositionClose(PositionGetTicket(i));
         }
     }
     
-    // Delete all pending orders
     for(int i=OrdersTotal()-1; i>=0; i--) {
         if(OrderSelect(OrderGetTicket(i))) {
-            Print("Deleting order ticket #", OrderGetTicket(i));
             trade.OrderDelete(OrderGetTicket(i));
         }
     }
     
-    // Reset state and clean up visualization
     for(int i=0; i<5; i++) {
-        Print("DEBUG - Cleaning up level ", i);  // Debug print
         CleanupLevelVisualization(i);
         hedgeLevels[i].isActive = false;
         hedgeLevels[i].ticket = 0;
     }
     
     isInitialTradeOpen = false;
-    Comment("");  // Clear any comments
+    Comment("");
     ChartRedraw(0);
-    Print("DEBUG - CloseAllPositions completed");  // Debug print
-}
-
-//+------------------------------------------------------------------+
-//| Check level exit and cleanup                                       |
-//+------------------------------------------------------------------+
-void CheckLevelExit(int level)
-{
-    if(level >= 5) return;
-    
-    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-    double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-    
-    // Check if TP hit
-    if((hedgeLevels[level].isLong && bid >= hedgeLevels[level].takeProfit) ||
-       (!hedgeLevels[level].isLong && ask <= hedgeLevels[level].takeProfit)) {
-        // Store exit information
-        hedgeLevels[level].exitTime = TimeCurrent();
-        hedgeLevels[level].exitPrice = hedgeLevels[level].takeProfit;
-        CloseAllPositions();
-        return;
-    }
-    
-    // Check if SL hit
-    if((hedgeLevels[level].isLong && bid <= hedgeLevels[level].stopLoss) ||
-       (!hedgeLevels[level].isLong && ask >= hedgeLevels[level].stopLoss)) {
-        // Store exit information
-        hedgeLevels[level].exitTime = TimeCurrent();
-        hedgeLevels[level].exitPrice = hedgeLevels[level].stopLoss;
-        
-        // Clean up current level visualization
-        CleanupLevelVisualization(level);
-        
-        // Reset current level's state but keep exit information
-        hedgeLevels[level].isActive = false;
-        hedgeLevels[level].ticket = 0;
-        
-        if(level < 4 && hedgeLevels[level + 1].ticket == 0) {
-            double nextEntryPrice = hedgeLevels[level].isLong ?
-                hedgeLevels[level].entryPrice - MathAbs(Channel) * pipValue :
-                hedgeLevels[level].entryPrice + MathAbs(Channel) * pipValue;
-                
-            PlacePendingOrder(level + 1, !hedgeLevels[level].isLong, nextEntryPrice);
-        }
-    }
 }
 
 //+------------------------------------------------------------------+
